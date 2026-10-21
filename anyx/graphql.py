@@ -22,9 +22,14 @@ class Capture:
         self.limited = []        # operations (or REST paths) X answered 429 for
         page.on("response", self._on)
 
+    @staticmethod
+    def _ours(url):
+        # x.com serves its JSON from x.com/i/api/... and, for some REST calls, from api.x.com/1.1/...
+        return "/i/api/" in url or url.startswith("https://api.x.com/")
+
     def _on(self, r):
         url = r.url
-        if "/i/api/" not in url:
+        if not self._ours(url):
             return
         if r.status == 429:
             self.limited.append(self._name(url))
@@ -33,17 +38,17 @@ class Capture:
             body = r.json()
         except Exception:
             return
-        if "/i/api/graphql/" in url:
-            op = url.split("/i/api/graphql/", 1)[1].split("/", 2)[1].split("?", 1)[0]
-            self.items.append((op, body))
+        if "/graphql/" in url:
+            self.items.append((self._name(url), body))
         else:
-            self.rest.append((url.split("/i/api/", 1)[1].split("?", 1)[0], body))
+            self.rest.append((self._name(url), body))
 
     @staticmethod
     def _name(url):
-        if "/i/api/graphql/" in url:
-            return url.split("/i/api/graphql/", 1)[1].split("/", 2)[1].split("?", 1)[0]
-        return url.split("/i/api/", 1)[1].split("?", 1)[0]
+        u = url.split("?", 1)[0]
+        if "/graphql/" in u:
+            return u.split("/graphql/", 1)[1].split("/", 2)[1]
+        return u.split("/i/api/", 1)[1] if "/i/api/" in u else u.split("api.x.com/", 1)[1]
 
     def ops(self):
         return [op for op, _ in self.items]

@@ -101,6 +101,7 @@ class Session:
         from . import graphql
         from .errors import RateLimited
         p = self.ctx.pages[0] if self.ctx.pages else self.page()
+        p.set_viewport_size({"width": 1280, "height": 1000})   # narrower windows fold the side bar away
         cap = graphql.Capture(p)
         try:
             self.goto(p, "https://x.com/home")
