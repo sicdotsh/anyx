@@ -31,6 +31,25 @@ def _dialog(p):
 WHO = ("everyone", "following", "verified", "mentioned")     # order of X's "who can reply" choices
 
 
+def _discard_open_composer(p):
+    """A composer left open (by an earlier failure) would be reused by mistake; throw it away."""
+    for _ in range(2):
+        if not p.locator(_COMPOSE).count():
+            return
+        close = p.locator(_COMPOSE).last.locator('[data-testid="app-bar-close"]')
+        if close.count():
+            close.first.click()
+        else:
+            p.keyboard.press("Escape")
+        discard = p.locator('[data-testid="confirmationSheetCancel"]')
+        try:
+            discard.first.wait_for(state="visible", timeout=3000)
+            discard.first.click()
+        except Exception:
+            pass
+        p.wait_for_timeout(800)
+
+
 def _files(paths):
     out = [os.path.abspath(m) for m in (paths or [])]
     if len(out) > MEDIA_MAX:
@@ -95,6 +114,12 @@ def _who(p, dlg, who):
     group.wait_for(state="visible", timeout=10000)
     group.locator(":scope > *").nth(WHO.index(who)).click()
     p.wait_for_timeout(800)
+    card = p.locator('[data-testid="HoverCard"]')
+    if card.count() and card.first.is_visible():
+        p.keyboard.press("Escape")          # the choice is kept; the card would cover the Post button
+        p.wait_for_timeout(500)
+    if not p.locator(_COMPOSE).count():
+        raise UIChanged("closing the reply-settings card closed the composer")
 
 
 def _poll(p, dlg, poll):
@@ -139,6 +164,7 @@ def post(self, text, quote=None, reply=None, media=None, at=None, alt=None, poll
         raise UsageError("threads are posted now (X does not schedule or draft them)")
 
     p = self.page()
+    _discard_open_composer(p)
     cap = graphql.Capture(p)
     try:
         if quote or reply:
