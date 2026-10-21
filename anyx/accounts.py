@@ -106,12 +106,34 @@ def harvest(browser, profile=None, cdp=None, set_browser=True):
 
 
 def check(handle):
+    """Is the account usable right now? Opens it once and reports what X shows:
+    ok, expired (logged out), locked (X wants a check), suspended, rate_limited, wrong_account."""
+    from .errors import NotFound, RateLimited, WrongAccount
     from .session import Session
+    out = {"user": handle.lstrip("@").lower()}
     try:
-        with Session(handle) as x:
-            return {"user": x.me, "result": "ok", "browser": x.account["browser"]}
+        with Session(handle, verify="full") as x:
+            out["browser"] = x.account["browser"]
+            try:
+                u = x.user(x.me)
+                out.update(result="ok", followers=u["followers"], following=u["following"], posts=u["posts"],
+                           protected=u["protected"], verified=u["verified"])
+            except NotFound as e:
+                out.update(result="suspended" if "Suspended" in str(e) else "unavailable", detail=str(e))
+            if out.get("result") == "ok" and (u.get("posts") or 0) > 0:
+                try:
+                    hits = x.search(f"from:{x.me}", limit=3)
+                    out["in_search"] = len(hits) > 0
+                except Exception as e:  # noqa: BLE001
+                    out["in_search"] = None
+                    out["search_error"] = str(e)
     except SessionExpired as e:
-        return {"user": handle, "result": "expired", "detail": str(e)}
+        out.update(result="locked" if "locked" in str(e) else "expired", detail=str(e))
+    except RateLimited as e:
+        out.update(result="rate_limited", detail=str(e))
+    except WrongAccount as e:
+        out.update(result="wrong_account", detail=str(e))
+    return out
 
 
 def listing():

@@ -194,8 +194,7 @@ def dm(self, to, text=None, media=None):
             box.fill(text)
         n = len(cap.items)
         p.locator('[data-testid="dm-composer-send-button"]').first.click()
-        if cap.wait_for(("SendMessageCreateMutation",), timeout=30, after=n) is None:
-            raise ActionFailed("X did not confirm the message")
+        cap.confirm(("SendMessageCreateMutation",), "the message", after=n, timeout=30)
         return {"to": str(to), "conversation": p.url.rsplit("/", 1)[1], "result": "sent"}
     finally:
         cap.detach()

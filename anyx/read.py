@@ -92,6 +92,9 @@ def user(self, ref):
     try:
         self.goto(p, f"https://x.com/{h}")
         b = cap.wait_for(("UserByScreenName",), timeout=30)
+        res = (((b or {}).get("data") or {}).get("user") or {}).get("result") or {}
+        if res.get("__typename") == "UserUnavailable":
+            raise NotFound(f"@{h} is unavailable ({res.get('reason') or res.get('message') or 'unknown reason'})")
         _, us = graphql.walk([b] if b else [])
         u = next((x for x in us if (x["handle"] or "").lower() == h.lower()), None)
         if not u:
@@ -293,4 +296,28 @@ def shot(self, ref, out):
         art.screenshot(path=out)
         return out
     finally:
+        p.close()
+
+
+def analytics(self, ref):
+    """A post's analytics, as its author sees them: impressions, engagements, detail expands, profile
+    visits, link clicks, follows, and video plays and completions. Only for this account's own posts."""
+    from .session import tweet_id
+    tid = tweet_id(ref)
+    p = self.page()
+    cap = graphql.Capture(p)
+    try:
+        self.goto(p, f"https://x.com/{self.me}/status/{tid}/analytics")
+        b = cap.wait_for(("TweetActivityQuery",), timeout=30)
+        if b is None:
+            raise NotFound(f"no analytics for {tid} (is it @{self.me}'s own post?)")
+        r = ((b.get("data") or {}).get("tweet_result_by_rest_id") or {}).get("result") or {}
+        snake = lambda s: "".join("_" + c.lower() if c.isupper() else c for c in s).lstrip("_")
+        out = {"id": tid}
+        for group in ("datapoints_grid", "video"):
+            for m in r.get(group) or []:
+                out[snake(m["metric_type"])] = m.get("metric_value", 0)
+        return out
+    finally:
+        cap.detach()
         p.close()

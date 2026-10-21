@@ -139,13 +139,23 @@ class Session:
     def cookies(self):
         return self.driver.cookies()
 
+    @staticmethod
+    def clear_layers(page, tries=3):
+        """Close whatever sheet or popover X has laid over the page (a mask in #layers eats clicks)."""
+        for _ in range(tries):
+            if page.locator('#layers [data-testid="mask"]').count() == 0:
+                return
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(700)
+
     # ---- reading and acting: see read.py, act.py, compose.py ----
 
     from .read import (tweet, thread, quotes, user, timeline, search, notifications, home, trends,  # noqa: E402
-                       bookmarks, likes, followers, following, shot)
+                       bookmarks, likes, followers, following, shot, analytics)
     from .act import (like, unlike, retweet, unretweet, bookmark, unbookmark, delete,  # noqa: E402
                       follow, unfollow, mute, unmute, block, unblock, pin, unpin, edit_profile)
     from .compose import post, scheduled, delete_scheduled, drafts, delete_drafts, reschedule  # noqa: E402
     from .chat import chat_setup, chats, messages, dm  # noqa: E402
-    from .settings import settings, set_setting, muted_words, mute_word, unmute_word  # noqa: E402
+    from .communities import community, community_posts, join, leave  # noqa: E402
+    from .settings import settings, set_setting, muted_words, mute_word, unmute_word, set_handle  # noqa: E402
     from .lists import lists, list_create, list_add, list_remove, list_posts, list_members, list_delete  # noqa: E402

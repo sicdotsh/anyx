@@ -13,27 +13,49 @@ anyx drives a real browser the way a person would, and reads what X's own web ap
 ## What it does
 
 ```
-read     tweet  thread  quotes  user  posts  search  home  notifications  bookmarks  likes
-         followers  following  shot
-write    post (plain, quote, reply, images, video, scheduled)  delete  scheduled
-         like  unlike  retweet  unretweet  bookmark  unbookmark  pin  unpin
-         follow  unfollow  mute  unmute  block  unblock  profile
-accounts add  import  harvest  set  check  list
+read      tweet  thread  quotes  user  posts  search  home  trends  notifications
+          bookmarks  likes  followers  following  analytics  shot
+post      post: plain, quote, reply, thread, up to 4 images with alt text or a video,
+          poll, who can reply, scheduled, draft
+          delete  scheduled (list, move, delete)  drafts (list, delete)
+engage    like  unlike  retweet  unretweet  bookmark  unbookmark  pin  unpin
+people    follow  unfollow  mute  unmute  block  unblock
+lists     lists  list create | add | remove | posts | members | delete
+groups    community (info, posts)  join  leave
+chat      chat setup  chats  messages  dm
+account   profile  settings (read all; change 14, and the @handle)  muted (words)
+accounts  add  login  import  harvest  set  check  list
 ```
 
 ```
 anyx posts nasa -n 20
 anyx search "from:nasa min_faves:1000" --tab top
 anyx thread https://x.com/jack/status/20
-anyx --as alice post "hello" --media cat.jpg
+anyx trends --tab news
+anyx --as alice post "hello" --media cat.jpg --alt "a cat on a desk"
 anyx --as alice post "agreed" --quote https://x.com/jack/status/20
+anyx --as alice post "1/3" --thread "2/3" "3/3"
+anyx --as alice post "which?" --poll "this|that" --poll-days 1
 anyx --as alice post "later" --at "2026-12-01 09:00"
 anyx --as bob like https://x.com/jack/status/20
-anyx --as bob shot https://x.com/jack/status/20 -o jack.png
+anyx --as bob dm alice "hi"
+anyx --as bob messages alice
+anyx --as alice,bob,carol follow nasa          # each account, in parallel
+anyx --as all --wait notifications -n 5        # every account; sleep through rate limits
 anyx --json user jack | jq .followers
 ```
 
-`--json` on any command prints JSON instead of text. `--show` opens a visible window so you can watch.
+`--json` on any command prints JSON instead of text. `--show` opens a visible window so you can watch. `--as a,b,c` (or `all`) runs the command as each account, `-j` at a time; accounts that share one browser profile take turns. `--wait` sleeps until the moment X says a rate limit lifts, then carries on.
+
+## Chat
+
+X's chat is end-to-end capable, so message bodies cross the wire encoded and encrypted; anyx reads them from the page after X's own app has decrypted them. Chat asks each account for a 4-digit passcode once, and again on every new browser. Give it to anyx once and it answers X whenever asked:
+
+```
+anyx --as alice chat setup --pin 1234
+```
+
+X only delivers messages between accounts that follow each other, or to accounts that open their requests (`anyx settings set dms everyone`).
 
 ## Accounts
 
@@ -41,9 +63,10 @@ anyx keeps each account's x.com cookies in `~/.anyx/accounts/<handle>.json`, one
 
 ```
 anyx accounts add alice                         # opens a window on X's login page; log in by hand
+anyx accounts login - --file creds.tsv          # log in with password (+ TOTP secret), one per line
 anyx accounts import alice cookies.json         # cookies exported from any browser
 anyx accounts harvest --browser adspower --profile work   # store every account logged into that profile
-anyx accounts check alice                       # still logged in?
+anyx accounts check all                         # ok, expired, locked, suspended, rate_limited, in search?
 anyx accounts list
 ```
 
@@ -94,14 +117,16 @@ anyx exits with a code that says what happened, so scripts can react:
 | 5 | something anyx relies on was not on the page: X changed its layout |
 | 6 | rate limited by X; wait about 15 minutes |
 | 7 | the post or account does not exist or is not visible |
-| 8 | the click went through but X did not confirm the change |
+| 8 | X did not confirm the change, or refused it (its own reason is printed, e.g. a duplicate post) |
 
 Writes are only reported as done after X's own request for them (FavoriteTweet, CreateTweet, friendships/create, ...) comes back.
 
 ## Things to know
 
 - A quote is made through the quoted post's Repost > Quote menu, never by pasting its URL. Both look like quotes, but only the first appears in the quoted post's quote list.
-- Scheduled posts are posted by X at the given time; your machine can be off by then. X needs them at least 5 minutes ahead.
+- Scheduled posts are posted by X at the given time; your machine can be off by then. X needs them at least 5 minutes ahead. X sometimes disables scheduling for an account; anyx says so instead of posting.
+- Settings switches are found by their position on X's settings pages; the live test checks those positions.
+- `tests/live.py` runs every command against real X and puts everything back. Run it daily: when X changes a page, the step that breaks names what went missing.
 - Every page load costs requests against the account's rate limits, like browsing by hand does. Many commands in a row on one account will hit them.
 - Automating an account is your responsibility under X's rules.
 

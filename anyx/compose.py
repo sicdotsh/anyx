@@ -55,11 +55,19 @@ def _attach(p, dlg, media, alt):
     if alt:
         dlg.locator('[data-testid="altTextWrapper"]').first.click()
         layer = p.locator("#layers")
-        for i, text in enumerate(alt[:len(media)]):
-            edu = layer.locator('[data-testid="altTextEducationSheetPrimaryAction"]')
-            if edu.count():
-                edu.first.click()
+
+        def edu(wait=1500):
+            # X shows an "about alt text" sheet over the editor, sometimes a moment late
+            e = layer.locator('[data-testid="altTextEducationSheetPrimaryAction"]')
+            try:
+                e.first.wait_for(state="visible", timeout=wait)
+                e.first.click()
                 p.wait_for_timeout(600)
+            except Exception:
+                pass
+
+        for i, text in enumerate(alt[:len(media)]):
+            edu()
             box = layer.locator('[data-testid="altTextInput"]').first
             box.wait_for(state="visible", timeout=15000)
             box.fill(text or "")
@@ -69,6 +77,7 @@ def _attach(p, dlg, media, alt):
                     raise UIChanged("no next-image button in the media editor")
                 nxt.first.click()
                 p.wait_for_timeout(800)
+        edu(800)
         layer.locator('[data-testid="endEditingButton"]').first.click()
         p.wait_for_timeout(1200)
 
@@ -181,8 +190,7 @@ def post(self, text, quote=None, reply=None, media=None, at=None, alt=None, poll
             c = p.locator('[data-testid="confirmationSheetConfirm"]').first
             c.wait_for(state="visible", timeout=15000)
             c.click()
-            if cap.wait_for(("CreateDraftTweet",), timeout=20, after=n) is None:
-                raise ActionFailed("X did not confirm the draft")
+            cap.confirm(("CreateDraftTweet",), "the draft", after=n, timeout=20)
             return {"draft": text[:60], "result": "saved"}
         if at:
             opt = dlg.locator('[data-testid="scheduleOption"]').first
@@ -342,8 +350,7 @@ def reschedule(self, word, at):
         p.wait_for_selector(SEL["month"], state="detached", timeout=20000)
         n = len(cap.items)
         dlg.locator('[data-testid="tweetButton"]').click()
-        if cap.wait_for(("EditScheduledTweet", "CreateScheduledTweet"), timeout=30, after=n) is None:
-            raise ActionFailed("X did not confirm the new time")
+        cap.confirm(("EditScheduledTweet", "CreateScheduledTweet"), "the new time", after=n, timeout=30)
         return {"scheduled": at.strftime("%Y-%m-%d %H:%M"), "result": "moved"}
     finally:
         cap.detach()

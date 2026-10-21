@@ -100,9 +100,7 @@ def list_create(self, name, description="", private=True):
             raise UIChanged("no Next button on the list form")
         n = len(cap.items)
         nxt.click()
-        b = cap.wait_for(("CreateList",), timeout=20, after=n)
-        if not b:
-            raise ActionFailed("X did not confirm CreateList")
+        b = cap.confirm(("CreateList",), "CreateList", after=n)
         made = _lists_in([b])
         lid = made[0]["id"] if made else graphql.created_id(b, "list")
         return {"id": lid, "name": name, "private": private, "url": f"https://x.com/i/lists/{lid}"}
@@ -146,8 +144,7 @@ def _membership(self, list_ref, who, add):
         n = len(cap.items)
         save.click()
         op = "ListAddMember" if add else "ListRemoveMember"
-        if cap.wait_for((op,), timeout=20, after=n) is None:
-            raise ActionFailed(f"X did not confirm {op}")
+        cap.confirm((op,), f"{op}", after=n, timeout=20)
         return {"list": lid, "user": h, "result": "done"}
     finally:
         cap.detach()
@@ -195,8 +192,7 @@ def list_delete(self, list_ref):
         c.wait_for(state="visible", timeout=15000)
         n = len(cap.items)
         c.click()
-        if cap.wait_for(("DeleteList",), timeout=20, after=n) is None:
-            raise ActionFailed("X did not confirm DeleteList")
+        cap.confirm(("DeleteList",), "DeleteList", after=n, timeout=20)
         return {"list": lid, "result": "deleted"}
     finally:
         cap.detach()

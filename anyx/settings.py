@@ -29,8 +29,11 @@ SETTINGS = {
     "grok_personalize": ("grok_settings", "switch", 1, None),
     "grok_history":     ("grok_settings", "switch", 2, None),
     "language":         ("language", "select", 0, "language"),
+    "dms":              ("chat", "chat", None, "allow_dms_from"),
 }
-CHOICES = {"media_tagging_from": ("all", "following")}
+CHOICES = {"media_tagging_from": ("all", "following"),
+           # chat > settings > message requests: "allow requests from" No one / Verified users / Everyone
+           "dms": ("following", "verified", "everyone")}
 ON = ("on", "true", "1", "yes")
 OFF = ("off", "false", "0", "no")
 
@@ -46,8 +49,57 @@ def settings(self):
             p.reload(wait_until="domcontentloaded")
             b = cap.wait_rest("account/settings.json", timeout=20)
         if b is None:
+            if any("settings.json" in n for n in cap.limited):
+                raise cap.limit_error("account/settings.json")
             raise UIChanged("settings.json did not load")
         return b
+    finally:
+        cap.detach()
+        p.close()
+
+
+def _dm_settings(cap):
+    for b in reversed(cap.of("xChatDmSettingsQuery", "DmSettingsQuery")):
+        d = (b.get("data") or {}).get("dm_settings")
+        if d:
+            return d
+    return None
+
+
+def _set_dms(self, value):
+    from . import chat
+    opts = CHOICES["dms"]
+    if value not in opts:
+        raise UsageError(f"dms is one of {', '.join(opts)}")
+    p = self.page()
+    cap = graphql.Capture(p)
+    try:
+        chat._open(self, p, "https://x.com/i/chat/settings/message-requests")
+        p.wait_for_timeout(2500)
+        cur = (_dm_settings(cap) or {}).get("allow_dms_from")
+        if cur == value:
+            return {"setting": "dms", "value": value, "result": "already"}
+        row = p.locator('[data-testid="dm-container"] button').filter(has=p.locator('[data-slot="xds-list-label"]')).last
+        row.click()
+        radios = p.locator("[role=radio]")
+        radios.first.wait_for(state="visible", timeout=10000)
+        radios.nth(opts.index(value)).click()
+        dlg = radios.first.locator("xpath=ancestor::*[@role='dialog'][1]")
+        ok = dlg.locator("button").filter(has_text="Confirm")
+        if not ok.count():
+            ok = dlg.locator("button").filter(has_text="確認")
+        if not ok.count():
+            raise UIChanged("no Confirm button in the message-request choice")
+        ok.first.click()
+        p.wait_for_timeout(2500)
+        n = len(cap.items)
+        p.reload(wait_until="domcontentloaded")
+        chat._open(self, p, "https://x.com/i/chat/settings/message-requests")
+        cap.wait_for(("xChatDmSettingsQuery", "DmSettingsQuery"), timeout=20, after=n)
+        now = (_dm_settings(cap) or {}).get("allow_dms_from")
+        if now != value:
+            raise ActionFailed(f"dms is still {now}")
+        return {"setting": "dms", "value": value, "result": "done"}
     finally:
         cap.detach()
         p.close()
@@ -57,6 +109,8 @@ def set_setting(self, name, value):
     if name not in SETTINGS:
         raise UsageError(f"unknown setting {name} (known: {', '.join(SETTINGS)})")
     page, kind, where, key = SETTINGS[name]
+    if kind == "chat":
+        return _set_dms(self, value)
     p = self.page()
     cap = graphql.Capture(p)
     try:
@@ -68,6 +122,8 @@ def set_setting(self, name, value):
         for _ in range(60):                                   # the switches render a moment after the page
             if col.locator(need).count() > idx:
                 break
+            if any("settings.json" in n for n in cap.limited):
+                raise cap.limit_error("account/settings.json")
             p.wait_for_timeout(250)
         p.wait_for_timeout(800)
         if kind == "switch":
@@ -154,8 +210,9 @@ def mute_word(self, word):
             raise UIChanged("no Save button for muted words")
         n = len(cap.rest)
         save.first.click()
-        if cap.wait_rest("mutes/keywords/create", timeout=20, after=n) is None:
-            raise ActionFailed("X did not confirm the muted word")
+        b = cap.wait_rest("mutes/keywords/create", timeout=20, after=n)
+        if b is None or cap.refusal(b):
+            raise ActionFailed(f"X did not accept mutes/keywords/create: {cap.refusal(b) if b else 'no answer'}")
         return {"word": word, "result": "done"}
     finally:
         cap.detach()
@@ -188,9 +245,57 @@ def unmute_word(self, word):
             c.click()
         except Exception:
             pass
-        if cap.wait_rest("mutes/keywords/destroy", timeout=20, after=n) is None:
-            raise ActionFailed("X did not confirm removing the muted word")
+        b = cap.wait_rest("mutes/keywords/destroy", timeout=20, after=n)
+        if b is None or cap.refusal(b):
+            raise ActionFailed(f"X did not accept mutes/keywords/destroy: {cap.refusal(b) if b else 'no answer'}")
         return {"word": word, "result": "done"}
     finally:
         cap.detach()
         p.close()
+
+
+def set_handle(self, new):
+    """Change this account's @handle. The vault and config follow the new name."""
+    import os
+    import re
+    from . import config, vault
+    new = new.lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9_]{4,15}", new):
+        raise UsageError("a handle is 4 to 15 letters, digits or _")
+    if new.lower() == (self.me or "").lower():
+        return {"user": new, "result": "already"}
+    p = self.page()
+    cap = graphql.Capture(p)
+    try:
+        self.goto(p, "https://x.com/settings/screen_name")
+        box = p.locator('main input[name="typedScreenName"]').first
+        box.wait_for(state="visible", timeout=20000)
+        box.fill(new)
+        p.wait_for_timeout(2500)                    # X checks availability as you type
+        save = p.locator('main [data-testid="settingsDetailSave"]').first
+        if save.get_attribute("aria-disabled") == "true" or save.is_disabled():
+            raise ActionFailed(f"X does not accept @{new} (taken or not allowed)")
+        n = len(cap.rest)
+        save.click()
+        b = cap.wait_rest("account/settings", timeout=20, after=n)
+        if b is None:
+            raise ActionFailed("X did not confirm the new handle")
+        if cap.refusal(b):
+            raise ActionFailed(f"X refused the new handle: {cap.refusal(b)}")
+        p.wait_for_timeout(2000)
+    finally:
+        cap.detach()
+        p.close()
+    old = self.handle
+    cookies = vault.load(old)
+    vault.save(new, cookies)
+    os.remove(vault.path(old))
+    pin = vault.path(old)[:-5] + ".pin"
+    if os.path.exists(pin):
+        os.replace(pin, vault.path(new)[:-5] + ".pin")
+    cfg = config.load()
+    if old in cfg["accounts"]:
+        cfg["accounts"][new.lower()] = cfg["accounts"].pop(old)
+        config.save(cfg)
+    self.handle = self.me = new.lower()
+    return {"user": new, "was": old, "result": "done"}

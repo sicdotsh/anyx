@@ -74,6 +74,27 @@ class Capture:
             self.page.wait_for_timeout(200)
         return None
 
+    @staticmethod
+    def refusal(body):
+        """X's own error message when it answered a request with errors and no data, else None."""
+        if not isinstance(body, dict) or not body.get("errors"):
+            return None
+        data = body.get("data")
+        if data and any(v for v in (data.values() if isinstance(data, dict) else [data])):
+            return None
+        e = body["errors"][0]
+        return f"{e.get('message')} ({e.get('code')})" if e.get("code") else e.get("message")
+
+    def confirm(self, names, what, after=0, timeout=20):
+        """Wait for X's own request among `names`, and fail unless it came back without errors."""
+        from .errors import ActionFailed
+        b = self.wait_for(tuple(names), timeout=timeout, after=after)
+        if b is None:
+            raise ActionFailed(f"X did not confirm {what}")
+        if self.refusal(b):
+            raise ActionFailed(f"X refused {what}: {self.refusal(b)}")
+        return b
+
     def limit_error(self, what):
         if self.reset:
             left = max(0, int(self.reset - time.time()))

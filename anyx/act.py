@@ -31,8 +31,12 @@ def _post_action(self, ref, button, confirm=None, wait=None, done_button=None):
             c = p.locator(f'[data-testid="{confirm}"]').first
             c.wait_for(state="visible", timeout=15000)
             c.click()
-        if wait and cap.wait_for((wait,), timeout=20, after=n) is None:
-            raise ActionFailed(f"X did not confirm {wait} for {tid}")
+        if wait:
+            b = cap.wait_for((wait,), timeout=20, after=n)
+            if b is None:
+                raise ActionFailed(f"X did not confirm {wait} for {tid}")
+            if cap.refusal(b):
+                raise ActionFailed(f"X refused {wait} for {tid}: {cap.refusal(b)}")
         return {"id": tid, "result": "done"}
     finally:
         cap.detach()
@@ -98,8 +102,11 @@ def delete(self, ref):
         c = p.locator('[data-testid="confirmationSheetConfirm"]').first
         c.wait_for(state="visible", timeout=15000)
         c.click()
-        if cap.wait_for(("DeleteTweet",), timeout=20, after=n) is None:
+        b = cap.wait_for(("DeleteTweet",), timeout=20, after=n)
+        if b is None:
             raise ActionFailed(f"X did not confirm DeleteTweet for {tid}")
+        if cap.refusal(b):
+            raise ActionFailed(f"X refused to delete {tid}: {cap.refusal(b)}")
         return {"id": tid, "result": "deleted"}
     finally:
         cap.detach()
@@ -130,8 +137,7 @@ def _pin(self, ref, testid, op):
             c.click()
         except Exception:
             pass
-        if cap.wait_for((op,), timeout=20, after=n) is None:
-            raise ActionFailed(f"X did not confirm {op} for {tid}")
+        cap.confirm((op,), f"{op} for {tid}", after=n, timeout=20)
         return {"id": tid, "result": "done"}
     finally:
         cap.detach()
@@ -200,8 +206,11 @@ def _account_action(self, ref, button, rest, confirm=False, state=None, want=Tru
         except Exception:
             if confirm:
                 raise UIChanged(f"no confirmation sheet after {bt} on @{u['handle']}")
-        if cap.wait_rest(rest, timeout=20, after=n) is None:
+        b = cap.wait_rest(rest, timeout=20, after=n)
+        if b is None:
             raise ActionFailed(f"X did not confirm {rest} for @{u['handle']}")
+        if cap.refusal(b):
+            raise ActionFailed(f"X refused {rest} for @{u['handle']}: {cap.refusal(b)}")
         return {"user": u["handle"], "result": "done"}
     finally:
         cap.detach()
@@ -272,8 +281,11 @@ def edit_profile(self, name=None, bio=None, location=None, website=None, avatar=
         ok = p.locator('[data-testid="confirmationSheetConfirm"]')
         if ok.count():
             ok.first.click(timeout=10000)
-        if cap.wait_rest("account/update_profile", timeout=25, after=n) is None:
+        b = cap.wait_rest("account/update_profile", timeout=25, after=n)
+        if b is None:
             raise ActionFailed("X did not confirm the profile update")
+        if cap.refusal(b):
+            raise ActionFailed(f"X refused the profile update: {cap.refusal(b)}")
         p.wait_for_timeout(2000)
         return {"user": self.me, "result": "done"}
     finally:

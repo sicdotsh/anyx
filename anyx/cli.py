@@ -15,6 +15,7 @@ read
   bookmarks [-n N] | likes [<handle>] [-n N]
   followers <handle> [-n N] | following <handle> [-n N]
   shot <post> [-o file.png]         screenshot of the post as X shows it
+  analytics <post>                  impressions, engagements, profile visits, video plays (own posts)
 
 write
   post <text> [--quote <post>] [--reply <post>] [--media f ...] [--alt t ...] [--at "YYYY-MM-DD HH:MM"]
@@ -32,7 +33,8 @@ settings
   settings set <name> <value>       protected, protect_videos, media_tagging, media_tagging_from,
                                     sensitive_media, quality_filter, personalize_location,
                                     personalize_inferred, personalize_ads, grok_training,
-                                    grok_personalize, grok_history, language
+                                    grok_personalize, grok_history, language,
+                                    dms (following|verified|everyone), handle (renames the vault too)
   muted [--add word] [--remove word]  muted words
 
 lists
@@ -41,6 +43,10 @@ lists
   list add|remove <list> <handle>   <list> is an id, URL, or the name of one of your lists
   list posts|members <list> [-n N]
   list delete <list>
+
+communities
+  community <id|url> [--posts] [-n N]
+  join | leave <id|url>
 
 chat
   chat setup --pin NNNN             set (or enter on this browser) the chat passcode
@@ -54,7 +60,8 @@ accounts
   accounts import <handle> <cookies.json>
   accounts harvest --browser adspower --profile <name>   store every account logged into that browser
   accounts set <handle> [--browser NAME] [--profile NAME] [--cdp URL] [--proxy URL]
-  accounts check <handle>
+  accounts check <handle>|all                ok, expired, locked, suspended, rate_limited (and whether its posts show in search)
+  accounts login <handle>|- --file creds.tsv [--browser NAME]   log in with password (+ TOTP); one account or the whole file
   whoami
 
 <post> is a URL or an id; <handle> is a handle, @handle or profile URL.
@@ -252,6 +259,7 @@ def _parser():
     for name in ("followers", "following"):
         add(name, "ref").add_argument("-n", type=int, default=100)
     s = add("shot", "ref"); s.add_argument("-o", "--out")
+    add("analytics", "ref")
     s = add("post", "text"); s.add_argument("--quote"); s.add_argument("--reply")
     s.add_argument("--media", nargs="+"); s.add_argument("--at"); s.add_argument("--alt", nargs="+")
     s.add_argument("--poll"); s.add_argument("--poll-days", type=int); s.add_argument("--poll-hours", type=int)
@@ -265,6 +273,8 @@ def _parser():
     s = add("drafts"); s.add_argument("--delete", nargs="+")
     s = add("chat", "action"); s.add_argument("--pin")
     add("lists")
+    s = add("community", "ref"); s.add_argument("--posts", action="store_true"); s.add_argument("-n", type=int, default=40)
+    add("join", "ref"); add("leave", "ref")
     s = add("settings"); s.add_argument("args", nargs="*")
     s = add("muted"); s.add_argument("--add"); s.add_argument("--remove")
     s = add("list", "action"); s.add_argument("args", nargs="*"); s.add_argument("--description", default="")
@@ -279,7 +289,7 @@ def _parser():
     add("whoami")
     s = add("accounts", "action")
     s.add_argument("args", nargs="*")
-    for f in ("--browser", "--profile", "--cdp", "--proxy"):
+    for f in ("--browser", "--profile", "--cdp", "--proxy", "--file"):
         s.add_argument(f)
     return ap
 
@@ -317,7 +327,23 @@ def run(argv):
             out = {"user": rest[0].lstrip("@").lower(),
                    **config.set_account(rest[0], browser=a.browser, profile=a.profile, cdp=a.cdp, proxy=a.proxy)}
         elif act == "check" and rest:
-            out = accounts.check(rest[0])
+            hs = vault.handles() if rest[0] == "all" else rest
+            out = [accounts.check(h) for h in hs]
+            out = out[0] if len(out) == 1 else out
+        elif act == "login" and a.file:
+            from . import login
+            creds = login.read_file(a.file)
+            if rest and rest[0] != "-":
+                creds = [c for c in creds if c[0].lower() == rest[0].lstrip("@").lower()]
+                if not creds:
+                    raise UsageError(f"{rest[0]} is not in {a.file}")
+            out = []
+            for h, pw, sec in creds:
+                try:
+                    out.append(login.login(h, pw, sec, browser=a.browser or "chromium", headless=not g["show"]))
+                except AnyxError as e:
+                    out.append({"user": h, "result": "failed", "detail": str(e)})
+            out = out[0] if len(out) == 1 else out
         else:
             raise UsageError("accounts list | add <h> | import <h> <file> | harvest --browser B [--profile P|--cdp URL] | set <h> ... | check <h>")
         _print(out, g["json"])
@@ -377,6 +403,8 @@ def _one(a, g, handle):
             out = x.likes(a.ref, limit=a.n)
         elif c in ("followers", "following"):
             out = getattr(x, c)(a.ref, limit=a.n)
+        elif c == "analytics":
+            out = x.analytics(a.ref)
         elif c == "shot":
             from .session import tweet_id
             out = {"file": x.shot(a.ref, a.out or f"{tweet_id(a.ref)}.png")}
@@ -393,12 +421,18 @@ def _one(a, g, handle):
         elif c == "settings":
             if not a.args:
                 out = x.settings()
+            elif a.args[0] == "set" and len(a.args) == 3 and a.args[1] == "handle":
+                out = x.set_handle(a.args[2])
             elif a.args[0] == "set" and len(a.args) == 3:
                 out = x.set_setting(a.args[1], a.args[2])
             else:
                 raise UsageError("settings | settings set <name> <value>")
         elif c == "muted":
             out = x.mute_word(a.add) if a.add else x.unmute_word(a.remove) if a.remove else x.muted_words()
+        elif c == "community":
+            out = x.community_posts(a.ref, limit=a.n) if a.posts else x.community(a.ref)
+        elif c in ("join", "leave"):
+            out = getattr(x, c)(a.ref)
         elif c == "lists":
             out = x.lists()
         elif c == "list":
