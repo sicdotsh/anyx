@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anyx"
+version = "0.1.0"
+description = "Use X (Twitter) from any browser, as any of your accounts, from the command line or Python. No API keys."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "sic" }]
+requires-python = ">=3.10"
+dependencies = ["playwright>=1.45"]
+keywords = ["x", "twitter", "playwright", "automation", "cli", "adspower"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Environment :: Console",
+  "Topic :: Internet :: WWW/HTTP :: Browsers",
+]
+
+[project.urls]
+Homepage = "https://github.com/sicdotsh/anyx"
+
+[project.scripts]
+anyx = "anyx.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["anyx*"]

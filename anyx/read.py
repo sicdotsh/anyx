@@ -1,0 +1,196 @@
+"""Reading. Every function opens the page a person would open, listens to the JSON the page
+fetches, and returns plain dicts (see graphql.tweet and graphql.user). No API key is involved."""
+
+import os
+import urllib.parse
+
+from . import graphql
+from .errors import NotFound, UsageError
+
+TIMELINE_OPS = ("UserTweets", "UserOriginalsTimeline", "UserTweetsAndReplies", "UserMedia", "UserHighlightsTweets")
+
+
+def _collect(self, url, ops, limit=40, pick=None, scrolls=40, first_wait=30):
+    """Open `url`, wait for one of `ops`, scroll until `limit` items (as counted by `pick`) or no more."""
+    p = self.page()
+    cap = graphql.Capture(p)
+    try:
+        self.goto(p, url)
+        if cap.wait_for(ops, timeout=first_wait) is None:
+            if "Viewer" in cap.limited:
+                from .errors import RateLimited
+                raise RateLimited("X answered 429: this account is rate limited, wait ~15 minutes")
+            raise NotFound(f"nothing loaded at {url} (no {', '.join(ops)})")
+        p.wait_for_timeout(1200)
+        pick = pick or (lambda tw, us: tw)
+        stale = 0
+        last = -1
+        for _ in range(scrolls):
+            tw, us = graphql.walk(cap.of(*ops))
+            items = pick(tw, us)
+            if len(items) >= limit:
+                break
+            if len(items) == last:
+                stale += 1
+                if stale >= 3:
+                    break
+            else:
+                stale = 0
+            last = len(items)
+            p.mouse.wheel(0, 6000)
+            p.wait_for_timeout(1500)
+        tw, us = graphql.walk(cap.of(*ops))
+        return pick(tw, us)[:limit], cap
+    finally:
+        cap.detach()
+        p.close()
+
+
+def tweet(self, ref):
+    """One post, with its counts, media and the post it quotes."""
+    from .session import tweet_id
+    tid = tweet_id(ref)
+    items, _ = _collect(self, f"https://x.com/i/status/{tid}", ("TweetDetail", "TweetResultByRestId"),
+                        limit=1, pick=lambda tw, us: [t for t in tw if t["id"] == tid], scrolls=0)
+    if not items:
+        raise NotFound(f"post {tid} not found")
+    return items[0]
+
+
+def thread(self, ref, limit=50):
+    """A post and the replies shown under it, in page order (the post first)."""
+    from .session import tweet_id
+    tid = tweet_id(ref)
+
+    def pick(tw, us):
+        focal = next((t for t in tw if t["id"] == tid), None)
+        if not focal:
+            return []
+        conv = focal["conversation"] or tid
+        return [focal] + [t for t in tw if t["id"] != tid and t["conversation"] == conv]
+
+    items, _ = _collect(self, f"https://x.com/i/status/{tid}", ("TweetDetail",), limit=limit, pick=pick)
+    if not items:
+        raise NotFound(f"post {tid} not found")
+    return items
+
+
+def quotes(self, ref, limit=40):
+    """Posts that quote the post."""
+    from .session import tweet_id
+    tid = tweet_id(ref)
+    return _collect(self, f"https://x.com/i/status/{tid}/quotes", ("SearchTimeline",), limit=limit,
+                    pick=lambda tw, us: [t for t in tw if (t.get("quoted") or {}).get("id") == tid])[0]
+
+
+def user(self, ref):
+    """An account's profile and counts."""
+    from .session import handle_of
+    h = handle_of(ref)
+    p = self.page()
+    cap = graphql.Capture(p)
+    try:
+        self.goto(p, f"https://x.com/{h}")
+        b = cap.wait_for(("UserByScreenName",), timeout=30)
+        _, us = graphql.walk([b] if b else [])
+        u = next((x for x in us if (x["handle"] or "").lower() == h.lower()), None)
+        if not u:
+            raise NotFound(f"@{h} not found")
+        return u
+    finally:
+        cap.detach()
+        p.close()
+
+
+def timeline(self, ref, limit=40, replies=False, media=False):
+    """An account's posts, newest first. Includes its reposts; the pinned post is not moved to the top."""
+    from .session import handle_of
+    h = handle_of(ref)
+    tab = "/with_replies" if replies else "/media" if media else ""
+    items, _ = _collect(self, f"https://x.com/{h}{tab}", TIMELINE_OPS, limit=limit,
+                        pick=lambda tw, us: sorted([t for t in tw if (t["author"]["handle"] or "").lower() == h.lower()],
+                                                   key=lambda t: int(t["id"]), reverse=True))
+    return items
+
+
+def search(self, query, tab="latest", limit=40):
+    """X search. tab: latest, top, people, media. Advanced operators work (from:, min_faves:, since:, ...)."""
+    f = {"latest": "live", "top": "top", "people": "user", "media": "media"}.get(tab)
+    if not f:
+        raise UsageError("tab is latest, top, people or media")
+    url = "https://x.com/search?" + urllib.parse.urlencode({"q": query, "src": "typed_query", "f": f})
+    pick = (lambda tw, us: us) if tab == "people" else None
+    return _collect(self, url, ("SearchTimeline",), limit=limit, pick=pick)[0]
+
+
+def notifications(self, limit=40, mentions=False):
+    """Posts in the notifications tab (replies, mentions, quotes, posts liked or reposted)."""
+    url = "https://x.com/notifications/mentions" if mentions else "https://x.com/notifications"
+    return _collect(self, url, ("NotificationsTimeline",), limit=limit)[0]
+
+
+def home(self, limit=40, following=False):
+    """The home timeline: For you, or Following with following=True."""
+    p_ops = ("HomeLatestTimeline",) if following else ("HomeTimeline",)
+    p = self.page()
+    cap = graphql.Capture(p)
+    try:
+        self.goto(p, "https://x.com/home")
+        if following:
+            tab = p.get_by_role("tab").nth(1)
+            tab.click()
+        if cap.wait_for(p_ops, timeout=30) is None:
+            raise NotFound("home timeline did not load")
+        for _ in range(20):
+            tw, _ = graphql.walk(cap.of(*p_ops))
+            if len(tw) >= limit:
+                break
+            p.mouse.wheel(0, 6000)
+            p.wait_for_timeout(1500)
+        return graphql.walk(cap.of(*p_ops))[0][:limit]
+    finally:
+        cap.detach()
+        p.close()
+
+
+def bookmarks(self, limit=40):
+    return _collect(self, "https://x.com/i/bookmarks", ("Bookmarks", "BookmarkSearchTimeline"), limit=limit)[0]
+
+
+def likes(self, ref=None, limit=40):
+    """Posts an account liked. X only shows this for the logged-in account itself."""
+    from .session import handle_of
+    h = handle_of(ref) if ref else self.me
+    return _collect(self, f"https://x.com/{h}/likes", ("Likes",), limit=limit)[0]
+
+
+def _people(self, ref, kind, limit):
+    from .session import handle_of
+    h = handle_of(ref)
+    ops = {"followers": ("Followers", "BlueVerifiedFollowers"), "following": ("Following",)}[kind]
+    return _collect(self, f"https://x.com/{h}/{kind}", ops, limit=limit,
+                    pick=lambda tw, us: [u for u in us if (u["handle"] or "").lower() != h.lower()])[0]
+
+
+def followers(self, ref, limit=100):
+    return _people(self, ref, "followers", limit)
+
+
+def following(self, ref, limit=100):
+    return _people(self, ref, "following", limit)
+
+
+def shot(self, ref, out):
+    """A screenshot of the post exactly as X shows it to this account. Returns the file path."""
+    from .session import tweet_id
+    tid = tweet_id(ref)
+    p = self.page()
+    try:
+        self.goto(p, f"https://x.com/i/status/{tid}")
+        art = self.article(p, tid)
+        p.wait_for_timeout(2500)
+        os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
+        art.screenshot(path=out)
+        return out
+    finally:
+        p.close()

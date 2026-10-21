@@ -1,0 +1,111 @@
+"""AdsPower, through its Local API.
+
+The API key comes from the environment variable named in config (`adspower.key_env`, default
+ADSPOWER_API_KEY) or from `adspower.key`. Calls are serialized per machine with a lock file and
+spaced at least 1.1 s apart, which is what AdsPower tolerates.
+"""
+
+import fcntl
+import json
+import os
+import time
+import urllib.parse
+import urllib.request
+from contextlib import contextmanager
+
+from ..errors import AnyxError, UsageError
+
+LOCK = "/tmp/adspower-api.lock"
+GAP = 1.1
+DEFAULT_API = "http://local.adspower.net:50325"
+
+
+@contextmanager
+def _gate():
+    with open(LOCK, "a") as f:
+        deadline = time.monotonic() + 150
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise AnyxError("AdsPower API is busy (another process holds the lock)")
+                time.sleep(0.2)
+        try:
+            age = time.time() - os.path.getmtime(LOCK)
+            if age < GAP:
+                time.sleep(GAP - age)
+            yield
+        finally:
+            os.utime(LOCK, None)
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+class AdsPower:
+    def __init__(self):
+        self.uid = None
+        self.ctx = None
+        self.api = DEFAULT_API
+        self.key = None
+
+    def call(self, path, method="GET", **q):
+        url = self.api + path
+        data = None
+        headers = {"Authorization": "Bearer " + (self.key or "")}
+        if method == "POST":
+            data = json.dumps(q).encode()
+            headers["Content-Type"] = "application/json"
+        elif q:
+            url += "?" + urllib.parse.urlencode(q)
+        with _gate():
+            with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers), timeout=120) as r:
+                return json.load(r)
+
+    def _setup(self, account):
+        ap = account.get("_adspower") or {}
+        self.api = ap.get("api") or os.environ.get("ADSPOWER_API") or DEFAULT_API
+        self.key = ap.get("key") or os.environ.get(ap.get("key_env") or "ADSPOWER_API_KEY")
+        if not self.key:
+            raise UsageError("AdsPower API key missing: set ADSPOWER_API_KEY (or adspower.key in ~/.anyx/config.json)")
+
+    def profile_id(self, name):
+        page = 1
+        while True:
+            users = self.call("/api/v1/user/list", page=page, page_size=100)["data"]["list"]
+            for u in users:
+                if u["name"] == name or u["user_id"] == name:
+                    return u["user_id"]
+            if len(users) < 100:
+                break
+            page += 1
+        raise UsageError(f"no AdsPower profile named {name}")
+
+    def open(self, pw, handle, account, cookies, headless=True):
+        self._setup(account)
+        if not account.get("profile"):
+            raise UsageError(f"@{handle} uses adspower but has no profile "
+                             f"(anyx accounts set {handle} --browser adspower --profile <name>)")
+        self.uid = self.profile_id(account["profile"])
+        if cookies:
+            r = self.call("/api/v1/user/update", method="POST", user_id=self.uid, cookie=json.dumps(cookies))
+            if r.get("code") != 0:
+                raise AnyxError(f"AdsPower refused the cookies: {r.get('msg')}")
+            time.sleep(1.5)
+        r = self.call("/api/v1/browser/start", user_id=self.uid, headless="1" if headless else "0", open_tabs=1)
+        if r.get("code") != 0:
+            raise AnyxError(f"AdsPower could not start {account['profile']}: {r.get('msg')}")
+        browser = pw.chromium.connect_over_cdp(r["data"]["ws"]["puppeteer"])
+        self.ctx = browser.contexts[0]
+        return self.ctx
+
+    def close(self):
+        if self.uid:
+            try:
+                self.call("/api/v1/browser/stop", user_id=self.uid)
+            except Exception:
+                pass
+        self.ctx = None
+
+    def cookies(self):
+        return self.ctx.cookies("https://x.com") if self.ctx else []
