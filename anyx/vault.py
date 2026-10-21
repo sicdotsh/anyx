@@ -103,7 +103,7 @@ def split(cookies):
 # ---- where a cookie set was born ----
 # A login belongs to the browser it happened in. Using its cookies in another browser looks to X like one
 # session jumping between devices, which X answers by refusing things (seen: unblock -> 34). So each set
-# records its birthplace, and a Session refuses to open it anywhere else.
+# records its birthplace, and a Session opened anywhere else prints a note.
 
 def _meta_path(handle):
     return path(handle)[:-5] + ".meta.json"
