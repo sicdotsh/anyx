@@ -68,16 +68,19 @@ anyx acts like one person with one tab, because that is what keeps accounts heal
 
 ## Accounts
 
-anyx keeps each account's x.com cookies in `~/.anyx/accounts/<handle>.json`, one file per account. Which account a browser shows is decided by which cookies are poured into it, never by X's account switcher, so one browser profile can serve any number of accounts.
+A login belongs to the browser it happened in. anyx logs each account in itself, in that account's own browser, and keeps the cookies in `~/.anyx/accounts/<handle>.json` together with where they were born. It never carries a login into another browser: to X that looks like one session jumping between devices, and X answers by quietly refusing things.
 
 ```
-anyx accounts add alice                         # opens a window on X's login page; log in by hand
-anyx accounts login - --file creds.tsv          # log in with password (+ TOTP secret), one per line
-anyx accounts import alice cookies.json         # cookies exported from any browser
-anyx accounts harvest --browser adspower --profile work   # store every account logged into that profile
+anyx accounts login - --file creds.tsv          # log every account in, in its own Chromium
+anyx accounts login alice --file creds.tsv      # just one
+anyx accounts add alice                         # a visible window, for when X asks for more than a password
+anyx accounts harvest --browser adspower --profile work   # adopt accounts already logged into that profile
+anyx accounts import alice cookies.json --browser chrome   # cookies exported from that browser
 anyx accounts check all                         # ok, expired, locked, suspended, rate_limited, in search?
 anyx accounts list
 ```
+
+`creds.tsv` has one account per line: `handle<TAB>password<TAB>totp-secret`, the last column only for accounts with two-factor on. anyx spaces logins out; X asks new devices for an email code now and then, and an account that stops there needs `accounts add` once.
 
 Before anything is done, anyx checks that the browser really is the account asked for. If it is not, it stops without touching anything.
 

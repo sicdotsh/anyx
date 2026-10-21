@@ -76,7 +76,13 @@ class Session:
                               f"(anyx does nothing as this account until then)", c[0])
         cookies = vault.load(self.handle) if self.handle else None
         if self.handle and cookies is None and self.account["browser"] != "cdp":
-            raise UsageError(f"no cookies for @{self.handle} (anyx accounts add {self.handle})")
+            raise UsageError(f"no cookies for @{self.handle} (anyx accounts login {self.handle} --file <creds>)")
+        b = vault.born(self.handle) if self.handle else None
+        if cookies and not vault.same_place(b, self.account) and not self.force:
+            where = b["browser"] + (f" profile {b['profile']}" if b.get("profile") else "")
+            raise UsageError(f"@{self.handle}'s login was made in {where}; anyx will not carry it into "
+                             f"{self.account['browser']} (X sees one login jumping devices). Log in there instead: "
+                             f"anyx accounts login {self.handle} --file <creds> --browser {self.account['browser']}")
         self._pw = sync_playwright().start()
         try:
             self.ctx = self.driver.open(self._pw, self.handle or "_", self.account, cookies, self.headless)

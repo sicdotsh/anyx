@@ -38,14 +38,20 @@ def add(handle, timeout=600):
                 raise AnyxError(f"logged in as @{who}, not @{handle}; nothing saved")
             cookies = [c for c in ctx.cookies("https://x.com")]
             vault.save(handle, cookies)
-            config.set_account(handle, browser=config.load()["accounts"].get(handle, {}).get("browser", "chromium"))
+            vault.set_born(handle, "chromium")
+            config.set_account(handle, browser="chromium")
             return {"user": handle, "result": "saved"}
         finally:
             drv.close()
             drv.stop(handle)          # the login window; the next command starts the account's own browser
 
 
-def import_file(handle, path):
+def import_file(handle, path, browser=None, profile=None):
+    """Cookies exported from a browser. Say which browser they came from (--browser, --profile): anyx
+    will use them only there."""
+    if not browser:
+        raise UsageError("say which browser these cookies were made in: --browser chromium|chrome|cdp|adspower "
+                         "[--profile <adspower profile>]; anyx uses them only there")
     import json
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
@@ -55,7 +61,8 @@ def import_file(handle, path):
     if not any(c["name"] == "auth_token" for c in cookies):
         raise UsageError("no auth_token in that file")
     vault.save(handle, cookies)
-    config.set_account(handle)
+    vault.set_born(handle, browser, profile)
+    config.set_account(handle, browser=browser, profile=profile)
     return {"user": handle.lstrip("@").lower(), "result": "saved"}
 
 
@@ -93,6 +100,7 @@ def harvest(browser, profile=None, cdp=None, set_browser=True):
                 out[uid] = None
                 continue
             vault.save(who, cookies)
+            vault.set_born(who, browser, profile)
             if set_browser:
                 config.set_account(who, browser=browser, profile=profile, cdp=cdp)
             out[uid] = who

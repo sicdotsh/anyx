@@ -297,9 +297,10 @@ def set_handle(self, new):
     cookies = vault.load(old)
     vault.save(new, cookies)
     os.remove(vault.path(old))
-    pin = vault.path(old)[:-5] + ".pin"
-    if os.path.exists(pin):
-        os.replace(pin, vault.path(new)[:-5] + ".pin")
+    for ext in (".pin", ".meta.json"):
+        f = vault.path(old)[:-5] + ext
+        if os.path.exists(f):
+            os.replace(f, vault.path(new)[:-5] + ext)
     cfg = config.load()
     if old in cfg["accounts"]:
         cfg["accounts"][new.lower()] = cfg["accounts"].pop(old)

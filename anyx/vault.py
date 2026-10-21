@@ -45,7 +45,7 @@ def save(handle, cookies):
 def handles():
     if not os.path.isdir(config.ACCOUNTS):
         return []
-    return sorted(f[:-5] for f in os.listdir(config.ACCOUNTS) if f.endswith(".json"))
+    return sorted(f[:-5] for f in os.listdir(config.ACCOUNTS) if f.endswith(".json") and not f.endswith(".meta.json"))
 
 
 def normalize(cookies):
@@ -98,3 +98,35 @@ def split(cookies):
         sets[u] = normalize([dict(base, name="auth_token", value=tok, httpOnly=True),
                              dict(base, name="twid", value="u%3D" + u, httpOnly=False)] + shared)
     return sets
+
+
+# ---- where a cookie set was born ----
+# A login belongs to the browser it happened in. Using its cookies in another browser looks to X like one
+# session jumping between devices, which X answers by refusing things (seen: unblock -> 34). So each set
+# records its birthplace, and a Session refuses to open it anywhere else.
+
+def _meta_path(handle):
+    return path(handle)[:-5] + ".meta.json"
+
+
+def born(handle):
+    try:
+        with open(_meta_path(handle), encoding="utf-8") as f:
+            return json.load(f).get("born")
+    except (OSError, ValueError):
+        return None
+
+
+def set_born(handle, browser, profile=None):
+    os.makedirs(config.ACCOUNTS, exist_ok=True)
+    with open(_meta_path(handle), "w", encoding="utf-8") as f:
+        json.dump({"born": {"browser": browser, "profile": profile}}, f)
+
+
+def same_place(b, account):
+    """Is the browser `account` would open the one the cookies were born in?"""
+    if not b:
+        return True                 # sets saved before birthplaces were recorded
+    if b.get("browser") != account.get("browser"):
+        return False
+    return b.get("browser") != "adspower" or b.get("profile") == account.get("profile")

@@ -56,14 +56,14 @@ chat
 
 accounts
   accounts list
-  accounts add <handle>                      log in by hand once; anyx keeps the cookies
-  accounts import <handle> <cookies.json>
-  accounts harvest --browser adspower --profile <name>   store every account logged into that browser
+  accounts login <handle>|- --file creds.tsv [--browser NAME]   log in with password (+ TOTP); the usual way
+  accounts add <handle>                      log in by hand in a window anyx opens (when X asks for more than a password)
+  accounts harvest --browser adspower --profile <name>   adopt the accounts already logged into that browser
+  accounts import <handle> <cookies.json> --browser NAME [--profile P]   cookies exported from that browser
   accounts set <handle> [--browser NAME] [--profile NAME] [--cdp URL] [--proxy URL]
   status [<handle>...]                       which accounts have a browser open, which are resting
   stop [<handle>...|all]                     close the browsers anyx left open
   accounts check <handle>|all                ok, expired, locked, suspended, rate_limited (and whether its posts show in search)
-  accounts login <handle>|- --file creds.tsv [--browser NAME]   log in with password (+ TOTP); one account or the whole file
   whoami
 
 <post> is a URL or an id; <handle> is a handle, @handle or profile URL.
@@ -182,7 +182,7 @@ def _account(g):
     if len(known) == 1:
         return known[0]
     if not known:
-        raise UsageError("no accounts yet (anyx accounts add <handle>)")
+        raise UsageError("no accounts yet (anyx accounts login <handle> --file <creds>)")
     raise UsageError(f"which account? use --as ({', '.join(known)})")
 
 
@@ -345,7 +345,7 @@ def run(argv):
             print("A browser window opens on X's login page. Log in there; anyx waits.", file=sys.stderr)
             out = accounts.add(rest[0])
         elif act == "import" and len(rest) == 2:
-            out = accounts.import_file(rest[0], rest[1])
+            out = accounts.import_file(rest[0], rest[1], browser=a.browser, profile=a.profile)
         elif act == "harvest" and a.browser:
             out = accounts.harvest(a.browser, profile=a.profile, cdp=a.cdp)
         elif act == "set" and rest:
@@ -365,14 +365,21 @@ def run(argv):
                 if not creds:
                     raise UsageError(f"{rest[0]} is not in {a.file}")
             out = []
-            for h, pw, sec in creds:
+            import random as _r
+            import time as _t
+            for i, (h, pw, sec) in enumerate(creds):
+                if i:
+                    gap = _r.uniform(60, 180)          # many logins in a row from one address stand out
+                    print(f"anyx: next login in {int(gap)}s", file=sys.stderr, flush=True)
+                    _t.sleep(gap)
                 try:
                     out.append(login.login(h, pw, sec, browser=a.browser or "chromium", headless=not g["show"]))
                 except AnyxError as e:
                     out.append({"user": h, "result": "failed", "detail": str(e)})
             out = out[0] if len(out) == 1 else out
         else:
-            raise UsageError("accounts list | add <h> | import <h> <file> | harvest --browser B [--profile P|--cdp URL] | set <h> ... | check <h>")
+            raise UsageError("accounts list | login <h>|- --file F | add <h> | harvest --browser B [--profile P] | "
+                             "import <h> <file> --browser B | set <h> ... | check <h>|all")
         _print(out, g["json"])
         return 0
 

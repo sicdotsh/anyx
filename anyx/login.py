@@ -141,7 +141,8 @@ def login(handle, password, secret=None, browser="chromium", headless=True, wait
             link = p.locator('[data-testid="AppTabBar_Profile_Link"]')
             who = (link.first.get_attribute("href") or "").strip("/").lower() if link.count() else handle.lower()
             vault.save(who, ctx.cookies("https://x.com"))
-            config.set_account(who, browser=acct["browser"])
+            vault.set_born(who, acct["browser"], acct.get("profile"))
+            config.set_account(who, browser=acct["browser"], profile=acct.get("profile"))
             return {"user": who, "result": "logged in"}
         finally:
             drv.close()
