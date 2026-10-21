@@ -235,7 +235,7 @@ def unmute_word(self, word):
         if word not in words:
             return {"word": word, "result": "already"}
         main = p.locator("main").first
-        label = main.locator(f'[data-testid="{word}-LTRtext"]').first
+        label = main.get_by_text(word, exact=True).first      # the row has no per-word marker
         label.wait_for(state="visible", timeout=15000)
         row = label.locator("xpath=ancestor::*[.//button or .//*[@role='button']][1]")
         btn = row.locator('[role=button][aria-label="ミュートを解除"], [role=button][aria-label="Unmute"], '

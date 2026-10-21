@@ -23,10 +23,18 @@ import anyx  # noqa: E402
 
 PAUSE = 0.0          # anyx paces itself
 results = []
+ONLY = None          # the sections to run (None: all); setup always runs
+SECTION = ["setup"]
+
+
+def section(name):
+    SECTION[0] = name
 
 
 def step(name, fn, expect=None, soft=False):
     """soft: a miss is printed as "warn" and not counted as a failure (X-side delays, e.g. search indexing)."""
+    if ONLY and SECTION[0] != "setup" and SECTION[0] not in ONLY:
+        return None
     t = time.monotonic()
     try:
         out = fn()
@@ -55,6 +63,20 @@ def step(name, fn, expect=None, soft=False):
     return out
 
 
+def write_png(path, w, h, rgb):
+    """A plain one-colour PNG, made without a browser or an image library."""
+    import struct
+    import zlib
+    row = b"\x00" + bytes(rgb) * w
+    raw = zlib.compress(row * h, 9)
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", raw) + chunk(b"IEND", b""))
+
+
 def _brief(o):
     if isinstance(o, list):
         return f"{len(o)} items"
@@ -69,8 +91,11 @@ def main():
     ap.add_argument("--as", dest="me", required=True)
     ap.add_argument("--target", required=True)
     ap.add_argument("--peer")
+    ap.add_argument("--only", help="comma-separated sections: read, engage, people, post, more, lists, settings, profile, chat")
     ap.add_argument("--show", action="store_true")
     a = ap.parse_args()
+    global ONLY
+    ONLY = set(a.only.split(",")) if a.only else None
     tag = datetime.now().strftime("%m%d%H%M%S")
     tmp = tempfile.mkdtemp(prefix="anyx-live-")
 
@@ -87,6 +112,7 @@ def main():
         P = own[0]["id"]
 
         # reading
+        section("read")
         step("tweet", lambda: x.tweet(P), lambda t: t["id"] == P and t["views"] is not None)
         step("thread", lambda: x.thread(P, limit=5), lambda l: l and l[0]["id"] == P)
         step("quotes", lambda: x.quotes(P, limit=5), lambda l: isinstance(l, list))
@@ -101,6 +127,7 @@ def main():
              lambda o: os.path.getsize(o["file"]) > 1000)
 
         # engaging with the target's post
+        section("engage")
         done = lambda o: o["result"] in ("done", "already")
         step("like", lambda: x.like(P), done)
         step("like (again)", lambda: x.like(P), lambda o: o["result"] == "already")
@@ -113,6 +140,7 @@ def main():
         step("unbookmark", lambda: x.unbookmark(P), done)
 
         # relationships, restored to how they were
+        section("people")
         was_following = bool(target.get("i_follow"))
         if was_following:
             step("unfollow", lambda: x.unfollow(a.target), done)
@@ -131,13 +159,9 @@ def main():
              lambda u: bool(u["i_follow"]) == was_following and not u["i_mute"] and not u["i_block"])
 
         # posting, then cleaning up
+        section("post")
         img = os.path.join(tmp, "card.png")
-        pg = x.scratch()
-        pg.set_content(f"<body style='margin:0;background:#111;color:#fff;font:64px sans-serif;"
-                       f"display:flex;align-items:center;justify-content:center;width:800px;height:800px'>anyx {tag}</body>")
-        pg.set_viewport_size({"width": 800, "height": 800})
-        pg.screenshot(path=img)
-        pg.close()
+        write_png(img, 800, 800, (17, 17, 17))
 
         mine_pinned = (mine or {}).get("pinned")
         p1 = step("post", lambda: x.post(f"anyx live test {tag}"), lambda o: bool(o.get("id")))
@@ -164,6 +188,7 @@ def main():
                 step(name, lambda i=o["id"]: x.delete(i), lambda r: r["result"] == "deleted")
 
         # more ways to post
+        section("more")
         t1 = step("post poll", lambda: x.post("test", poll={"choices": ["a", "b"], "days": 1}), lambda o: bool(o.get("id")))
         t2 = step("post alt", lambda: x.post("test " + tag, media=[img], alt=["test"]), lambda o: bool(o.get("id")))
         if t2:
@@ -180,9 +205,12 @@ def main():
         step("delete draft", lambda: x.delete_drafts([tag]), lambda o: o["deleted"] == 1)
         mine_posts = step("posts (me)", lambda: x.timeline(a.me, limit=3), lambda l: isinstance(l, list))
         if mine_posts:
-            step("analytics", lambda: x.analytics(mine_posts[0]["id"]), lambda d: "impressions" in d)
+            seen = [t for t in mine_posts if (t.get("views") or 0) > 0]
+            if seen:
+                step("analytics", lambda: x.analytics(seen[0]["id"]), lambda d: "impressions" in d)
 
         # notifications, trends, lists
+        section("lists")
         step("notifications (all kinds)", lambda: x.notifications(limit=10), lambda l: isinstance(l, list))
         step("trends", lambda: x.trends(limit=5), lambda l: len(l) > 0)
         L = step("list create", lambda: x.list_create("test", "test"), lambda o: bool(o.get("id")))
@@ -194,6 +222,7 @@ def main():
             step("list delete", lambda: x.list_delete(L["id"]), lambda o: o["result"] == "deleted")
 
         # settings, each flipped and put back
+        section("settings")
         before = step("settings", x.settings, lambda d: "protected" in d) or {}
         for name, key in (("sensitive_media", "display_sensitive_media"), ("personalize_ads", "allow_ads_personalization")):
             was = "on" if before.get(key) else "off"
@@ -205,13 +234,15 @@ def main():
         step("muted remove", lambda: x.unmute_word("test" + tag), done)
 
         # profile, restored
+        section("profile")
         if mine:
             old_bio = mine.get("bio") or ""
             step("profile bio", lambda: x.edit_profile(bio=(old_bio + f" ·{tag}")[:160]), done)
             step("profile bio shows", lambda: x.user(a.me), lambda u: tag in (u.get("bio") or ""))
             step("profile bio restore", lambda: x.edit_profile(bio=old_bio), done)
 
-    if a.peer:
+    section("chat")
+    if a.peer and (not ONLY or "chat" in ONLY):
         with anyx.Session(a.peer, headless=not a.show) as y:
             step("dm peer -> me", lambda: y.dm(a.me, "test"), lambda o: o["result"] == "sent")
         with anyx.Session(a.me, headless=not a.show) as x:

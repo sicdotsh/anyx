@@ -69,7 +69,8 @@ class Capture:
         end = start + timeout
         reloaded = False
         while time.monotonic() < end:
-            if not reloaded and getattr(self.page, "spa_url", None) and time.monotonic() - start > max(6, timeout / 3):
+            # X answers revisits from its cache without fetching; don't wait long before loading for real
+            if not reloaded and getattr(self.page, "spa_url", None) and time.monotonic() - start > 4:
                 reloaded = True
                 url = self.page.spa_url
                 self.page.goto(url, wait_until="domcontentloaded")
@@ -115,8 +116,19 @@ class Capture:
         return RateLimited(f"X answered 429 for {what} (rate limited; usually ~15 minutes)")
 
     def wait_rest(self, path_part, timeout=30.0, after=0):
-        end = time.monotonic() + timeout
+        start = time.monotonic()
+        end = start + timeout
+        reloaded = False
         while time.monotonic() < end:
+            if not reloaded and getattr(self.page, "spa_url", None) and time.monotonic() - start > 4:
+                reloaded = True
+                url = self.page.spa_url
+                self.page.goto(url, wait_until="domcontentloaded")
+                try:
+                    self.page.evaluate("window.__anyx = 1")
+                except Exception:
+                    pass
+                self.page.spa_url = None
             for p, b in self.rest[after:]:
                 if path_part in p:
                     return b

@@ -126,7 +126,17 @@ def _membership(self, list_ref, who, add):
         item.wait_for(state="visible", timeout=15000)
         n0 = len(cap.items)
         item.click()
-        b = cap.wait_for(("ListOwnerships",), timeout=20, after=n0)
+        b = cap.wait_for(("ListOwnerships",), timeout=6, after=n0)
+        if b is None:
+            # X showed the picker from its cache; load the profile for real and open the picker again
+            p.keyboard.press("Escape")
+            self.reload(p)
+            p.locator('[data-testid="primaryColumn"] [data-testid="userActions"]').first.click(timeout=20000)
+            item = p.locator('[role="menu"] a[href="/i/lists/add_member"]').first
+            item.wait_for(state="visible", timeout=15000)
+            n0 = len(cap.items)
+            item.click()
+            b = cap.wait_for(("ListOwnerships",), timeout=20, after=n0)
         p.wait_for_timeout(1500)
         owned = _lists_in([b] if b else [])
         idx = next((i for i, l in enumerate(owned) if l["id"] == lid), None)

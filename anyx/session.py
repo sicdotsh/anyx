@@ -221,14 +221,15 @@ class Session:
 
     def article(self, page, tid):
         """The <article> of the post `tid` itself, not its parents, replies or quote cards."""
-        for sel in (f'article[data-testid="tweet"]:has(a[href$="/status/{tid}/analytics"])',
-                    f'article[data-testid="tweet"]:has(a[href*="/status/{tid}"]:has(time))'):
-            a = page.locator(sel).first
-            try:
-                a.wait_for(state="visible", timeout=20000)
-                return a
-            except Exception:
-                continue
+        # either marker will do; wait for whichever shows first
+        sel = (f'article[data-testid="tweet"]:has(a[href$="/status/{tid}/analytics"]), '
+               f'article[data-testid="tweet"]:has(a[href*="/status/{tid}"]:has(time))')
+        a = page.locator(sel).first
+        try:
+            a.wait_for(state="visible", timeout=25000)
+            return a
+        except Exception:
+            pass
         raise NotFound(f"post {tid} is not visible to @{self.me or self.handle}")
 
     def cookies(self):
