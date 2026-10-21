@@ -141,10 +141,11 @@ class Session:
 
     # ---- reading and acting: see read.py, act.py, compose.py ----
 
-    from .read import (tweet, thread, quotes, user, timeline, search, notifications, home,  # noqa: E402
+    from .read import (tweet, thread, quotes, user, timeline, search, notifications, home, trends,  # noqa: E402
                        bookmarks, likes, followers, following, shot)
     from .act import (like, unlike, retweet, unretweet, bookmark, unbookmark, delete,  # noqa: E402
                       follow, unfollow, mute, unmute, block, unblock, pin, unpin, edit_profile)
-    from .compose import post, scheduled, delete_scheduled  # noqa: E402
+    from .compose import post, scheduled, delete_scheduled, drafts, delete_drafts, reschedule  # noqa: E402
     from .chat import chat_setup, chats, messages, dm  # noqa: E402
+    from .settings import settings, set_setting, muted_words, mute_word, unmute_word  # noqa: E402
     from .lists import lists, list_create, list_add, list_remove, list_posts, list_members, list_delete  # noqa: E402

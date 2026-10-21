@@ -123,10 +123,110 @@ def search(self, query, tab="latest", limit=40):
     return _collect(self, url, ("SearchTimeline",), limit=limit, pick=pick)[0]
 
 
+ICONS = {"heart_icon": "like", "person_icon": "follow", "retweet_icon": "repost", "bell_icon": "post",
+         "bird_icon": "x", "list_icon": "list", "milestone_icon": "milestone", "spaces_icon": "space",
+         "recommendation_icon": "recommendation", "security_alert_icon": "security", "lightning_bolt_icon": "trend"}
+
+
+def _notification_items(bodies):
+    """Notifications in page order. Likes, follows, reposts... come as TimelineNotification; replies,
+    mentions and quotes come as posts."""
+    out, seen = [], set()
+
+    def go(o):
+        if isinstance(o, dict):
+            if "entryId" in o and "content" in o and o["entryId"] not in seen:
+                ic = (o["content"] or {}).get("itemContent") or {}
+                if ic.get("__typename") == "TimelineNotification":
+                    seen.add(o["entryId"])
+                    t = ic.get("template") or {}
+                    users = [graphql.user((u.get("user_results") or {}).get("result") or {}) for u in t.get("from_users") or []]
+                    posts = [graphql.tweet((x.get("tweet_results") or {}).get("result")) for x in t.get("target_objects") or []]
+                    out.append({"kind": ICONS.get(ic.get("notification_icon"), ic.get("notification_icon")),
+                                "text": (ic.get("rich_message") or {}).get("text"),
+                                "time": ic.get("timestamp_ms"),
+                                "users": [u["handle"] for u in users if u],
+                                "posts": [x["id"] for x in posts if x],
+                                "id": ic.get("id")})
+                    return
+                if ic.get("__typename") == "TimelineTweet":
+                    seen.add(o["entryId"])
+                    t = graphql.tweet(((ic.get("tweet_results") or {}).get("result")))
+                    if t:
+                        kind = "reply" if t.get("reply_to") else "quote" if t.get("quoted") else "mention"
+                        out.append({"kind": kind, "text": t["text"], "time": t["created_at"],
+                                    "users": [t["author"]["handle"]], "posts": [t["id"]], "post": t})
+                    return
+            for v in o.values():
+                go(v)
+        elif isinstance(o, list):
+            for v in o:
+                go(v)
+    go(bodies)
+    return out
+
+
 def notifications(self, limit=40, mentions=False):
-    """Posts in the notifications tab (replies, mentions, quotes, posts liked or reposted)."""
+    """The notifications tab: likes, follows, reposts, replies, mentions, quotes... newest first.
+    Each item has kind, text, time, users (handles) and posts (ids); replies and mentions carry the post."""
     url = "https://x.com/notifications/mentions" if mentions else "https://x.com/notifications"
-    return _collect(self, url, ("NotificationsTimeline",), limit=limit)[0]
+    return _notifications_from(self, url, limit)
+
+
+def _notifications_from(self, url, limit):
+    p = self.page()
+    cap = graphql.Capture(p)
+    try:
+        self.goto(p, url)
+        if cap.wait_for(("NotificationsTimeline",), timeout=30) is None:
+            raise NotFound("notifications did not load")
+        p.wait_for_timeout(1200)
+        last = -1
+        for _ in range(20):
+            items = _notification_items(cap.of("NotificationsTimeline"))
+            if len(items) >= limit or len(items) == last:
+                break
+            last = len(items)
+            p.mouse.wheel(0, 6000)
+            p.wait_for_timeout(1500)
+        return _notification_items(cap.of("NotificationsTimeline"))[:limit]
+    finally:
+        cap.detach()
+        p.close()
+
+
+def trends(self, tab="trending", limit=50):
+    """Explore: trending topics. tab: for_you, trending, news, sports, entertainment."""
+    if tab not in ("for_you", "trending", "news", "sports", "entertainment"):
+        raise UsageError("tab is for_you, trending, news, sports or entertainment")
+    p = self.page()
+    cap = graphql.Capture(p)
+    try:
+        self.goto(p, f"https://x.com/explore/tabs/{tab}")
+        if cap.wait_for(("GenericTimelineById", "ExplorePage"), timeout=30) is None:
+            raise NotFound("explore did not load")
+        p.wait_for_timeout(2000)
+        out, seen = [], set()
+
+        def go(o):
+            if isinstance(o, dict):
+                if o.get("itemType") == "TimelineTrend" and o.get("name") and o["name"] not in seen:
+                    seen.add(o["name"])
+                    ctx = (o.get("social_context") or {}).get("text") or ""
+                    out.append({"name": o["name"], "context": ctx,
+                                "ai": bool(o.get("is_ai_trend")),
+                                "url": "https://x.com/search?" + urllib.parse.urlencode({"q": o["name"]})})
+                    return
+                for v in o.values():
+                    go(v)
+            elif isinstance(o, list):
+                for v in o:
+                    go(v)
+        go(cap.of("GenericTimelineById", "ExplorePage"))
+        return out[:limit]
+    finally:
+        cap.detach()
+        p.close()
 
 
 def home(self, limit=40, following=False):

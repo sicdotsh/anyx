@@ -28,23 +28,106 @@ def _dialog(p):
     return d
 
 
-def post(self, text, quote=None, reply=None, media=None, at=None):
-    """Post `text`. quote/reply take a post URL or id. media: up to 4 image paths or 1 video.
-    at: a datetime (or "YYYY-MM-DD HH:MM") to schedule instead of posting now.
-    Returns {"id", "url"} for a post, {"scheduled": "..."} for a schedule."""
+WHO = ("everyone", "following", "verified", "mentioned")     # order of X's "who can reply" choices
+
+
+def _files(paths):
+    out = [os.path.abspath(m) for m in (paths or [])]
+    if len(out) > MEDIA_MAX:
+        raise UsageError(f"at most {MEDIA_MAX} media per post")
+    for m in out:
+        if not os.path.exists(m):
+            raise UsageError(f"no such file: {m}")
+    return out
+
+
+def _attach(p, dlg, media, alt):
+    dlg.locator('[data-testid="fileInput"]').last.set_input_files(media)
+    p.wait_for_function(
+        """(n) => {
+            const ds = [...document.querySelectorAll('[role="dialog"]')]
+                .filter(d => d.querySelector('[data-testid="tweetTextarea_0"]'));
+            const d = ds[ds.length - 1];
+            return d && d.querySelectorAll('[data-testid="attachments"] img, [data-testid="attachments"] video').length >= n;
+        }""", arg=1 if any(m.lower().endswith((".mp4", ".mov")) for m in media) else len(media),
+        timeout=UPLOAD_TIMEOUT * 1000)
+    p.wait_for_timeout(SETTLE * 1000)
+    if alt:
+        dlg.locator('[data-testid="altTextWrapper"]').first.click()
+        layer = p.locator("#layers")
+        for i, text in enumerate(alt[:len(media)]):
+            edu = layer.locator('[data-testid="altTextEducationSheetPrimaryAction"]')
+            if edu.count():
+                edu.first.click()
+                p.wait_for_timeout(600)
+            box = layer.locator('[data-testid="altTextInput"]').first
+            box.wait_for(state="visible", timeout=15000)
+            box.fill(text or "")
+            if i < min(len(alt), len(media)) - 1:
+                nxt = layer.locator('[role=button][aria-label="次の画像"], [role=button][aria-label="Next image"]')
+                if not nxt.count():
+                    raise UIChanged("no next-image button in the media editor")
+                nxt.first.click()
+                p.wait_for_timeout(800)
+        layer.locator('[data-testid="endEditingButton"]').first.click()
+        p.wait_for_timeout(1200)
+
+
+def _who(p, dlg, who):
+    if who not in WHO:
+        raise UsageError(f"who can reply: {', '.join(WHO)}")
+    btn = dlg.locator("[role=button]").filter(has_text="返信できます")
+    if not btn.count():
+        btn = dlg.locator("[role=button]").filter(has_text="can reply")
+    if not btn.count():
+        raise UIChanged("no reply-settings button in the composer")
+    btn.first.click()
+    group = p.locator('[data-testid="HoverCard"] [role="radiogroup"]').first
+    group.wait_for(state="visible", timeout=10000)
+    group.locator(":scope > *").nth(WHO.index(who)).click()
+    p.wait_for_timeout(800)
+
+
+def _poll(p, dlg, poll):
+    choices = poll.get("choices") or []
+    if not 2 <= len(choices) <= 4:
+        raise UsageError("a poll has 2 to 4 choices")
+    dlg.locator('[data-testid="createPollButton"]').first.click()
+    p.wait_for_timeout(800)
+    for i, c in enumerate(choices, 1):
+        if i > 2:
+            dlg.locator('[data-testid="addPollChoice"]').first.click()
+            p.wait_for_timeout(300)
+        dlg.locator(f'input[name="Choice{i}"]').first.fill(c)
+    for key, sel in (("days", "selectPollDays"), ("hours", "selectPollHours"), ("minutes", "selectPollMinutes")):
+        if poll.get(key) is not None:
+            dlg.locator(f'[data-testid="{sel}"]').first.select_option(str(poll[key]))
+
+
+def post(self, text, quote=None, reply=None, media=None, at=None, alt=None, poll=None, who=None,
+         thread=None, draft=False):
+    """Post `text`.
+
+    quote / reply   a post URL or id to quote or answer
+    media           up to 4 image paths or 1 video;  alt: one description per image
+    poll            {"choices": [...2-4], "days": 1, "hours": 0, "minutes": 0}
+    who             who can reply: everyone, following, verified, mentioned
+    thread          more texts, posted as a thread under this one
+    at              a datetime (or "YYYY-MM-DD HH:MM") to schedule instead of posting now
+    draft           save to drafts instead of posting
+    Returns {"id", "url"} ({"ids"} too for a thread), {"scheduled"} for a schedule, {"draft"} for a draft."""
     from .session import tweet_id
     if quote and reply:
         raise UsageError("a post can quote or reply, not both")
-    media = [os.path.abspath(m) for m in (media or [])]
-    if len(media) > MEDIA_MAX:
-        raise UsageError(f"at most {MEDIA_MAX} media")
-    for m in media:
-        if not os.path.exists(m):
-            raise UsageError(f"no such file: {m}")
+    if poll and media:
+        raise UsageError("a post carries a poll or media, not both")
+    media = _files(media)
     if isinstance(at, str):
         at = datetime.strptime(at, "%Y-%m-%d %H:%M")
     if at and at < datetime.now() + timedelta(minutes=LEAD_MIN):
         raise UsageError(f"schedules must be at least {LEAD_MIN} minutes ahead")
+    if (at or draft) and thread:
+        raise UsageError("threads are posted now (X does not schedule or draft them)")
 
     p = self.page()
     cap = graphql.Capture(p)
@@ -72,18 +155,19 @@ def post(self, text, quote=None, reply=None, media=None, at=None):
             except Exception:
                 raise ActionFailed("the quoted post did not attach to the composer; nothing was posted")
         if media:
-            dlg.locator('[data-testid="fileInput"]').set_input_files(media)
-            p.wait_for_function(
-                """(n) => {
-                    const ds = [...document.querySelectorAll('[role="dialog"]')]
-                        .filter(d => d.querySelector('[data-testid="tweetTextarea_0"]'));
-                    const d = ds[ds.length - 1];
-                    return d && d.querySelectorAll('[data-testid="attachments"] img, [data-testid="attachments"] video').length >= n;
-                }""", arg=1 if any(m.lower().endswith((".mp4", ".mov")) for m in media) else len(media),
-                timeout=UPLOAD_TIMEOUT * 1000)
-            p.wait_for_timeout(SETTLE * 1000)
+            _attach(p, dlg, media, alt)
         dlg.locator('[data-testid="tweetTextarea_0"]').click()
         p.keyboard.insert_text(text)
+        if poll:
+            _poll(p, dlg, poll)
+        if who and who != "everyone" and not reply:
+            _who(p, dlg, who)
+        for i, more in enumerate(thread or [], 1):
+            dlg.locator('[data-testid="addButton"]').first.click()
+            box = dlg.locator(f'[data-testid="tweetTextarea_{i}"]').first
+            box.wait_for(state="visible", timeout=10000)
+            box.click()
+            p.keyboard.insert_text(more)
         p.wait_for_function(
             """() => {
                 const ds = [...document.querySelectorAll('[role="dialog"]')]
@@ -91,8 +175,20 @@ def post(self, text, quote=None, reply=None, media=None, at=None):
                 const b = ds[ds.length - 1]?.querySelector('[data-testid="tweetButton"]');
                 return b && b.getAttribute('aria-disabled') !== 'true';
             }""", timeout=UPLOAD_TIMEOUT * 1000)
+        if draft:
+            n = len(cap.items)
+            dlg.locator('[data-testid="app-bar-close"]').first.click()
+            c = p.locator('[data-testid="confirmationSheetConfirm"]').first
+            c.wait_for(state="visible", timeout=15000)
+            c.click()
+            if cap.wait_for(("CreateDraftTweet",), timeout=20, after=n) is None:
+                raise ActionFailed("X did not confirm the draft")
+            return {"draft": text[:60], "result": "saved"}
         if at:
-            dlg.locator('[data-testid="scheduleOption"]').click()
+            opt = dlg.locator('[data-testid="scheduleOption"]').first
+            if opt.get_attribute("aria-disabled") == "true" or opt.is_disabled():
+                raise ActionFailed(f"X shows the schedule button disabled for @{self.me}; nothing was posted")
+            opt.click()
             p.wait_for_selector(SEL["month"], timeout=20000)
             for k, v in (("month", at.month), ("day", at.day), ("year", at.year), ("hour", at.hour), ("minute", at.minute)):
                 p.select_option(SEL[k], str(v))
@@ -101,24 +197,43 @@ def post(self, text, quote=None, reply=None, media=None, at=None):
             p.wait_for_timeout(1000)
         n = len(cap.items)
         dlg.locator('[data-testid="tweetButton"]').click()
-        ops = ("CreateScheduledTweet",) if at else ("CreateTweet", "CreateNoteTweet")
-        body = cap.wait_for(ops, timeout=60, after=n)
-        if body is None:
-            raise ActionFailed("X did not confirm the post")
         if at:
-            return {"scheduled": at.strftime("%Y-%m-%d %H:%M"),
-                    "id": graphql.created_id(body, "create_scheduled_tweet") or None}
-        tid = graphql.created_id(body, "create_tweet") or graphql.created_id(body, "notetweet_create")
-        if not tid:
-            raise ActionFailed(f"posted, but X's answer had no id: {str(body)[:200]}")
-        return {"id": tid, "url": f"https://x.com/{self.me}/status/{tid}"}
+            body = cap.wait_for(("CreateScheduledTweet",), timeout=60, after=n)
+            if body is None:
+                raise ActionFailed("X did not confirm the schedule")
+            return {"scheduled": at.strftime("%Y-%m-%d %H:%M"), "id": graphql.created_id(body, "create_scheduled_tweet")}
+        want = 1 + len(thread or [])
+        refused = None
+        ids = []
+        end = time.monotonic() + 60 + 10 * want
+        while time.monotonic() < end and len(ids) < want:
+            done = [b for op, b in cap.items[n:] if op in ("CreateTweet", "CreateNoteTweet")]
+            ids = [graphql.created_id(b, "create_tweet") or graphql.created_id(b, "notetweet_create") for b in done]
+            refused = next((e for b in done for e in (b.get("errors") or [])), None)
+            if refused:
+                break
+            p.wait_for_timeout(300)
+        ids = [i for i in ids if i]
+        if refused and not ids:
+            raise ActionFailed(f"X refused the post: {refused.get('message')}")
+        if not ids:
+            raise ActionFailed("X did not confirm the post")
+        out = {"id": ids[0], "url": f"https://x.com/{self.me}/status/{ids[0]}"}
+        if thread:
+            out["ids"] = ids
+            if len(ids) < want:
+                raise ActionFailed(f"only {len(ids)} of {want} posts of the thread were confirmed: {ids}")
+        return out
     finally:
         cap.detach()
         p.close()
 
 
-def _unsent(p):
-    p.goto(SCHEDULE_URL, wait_until="domcontentloaded")
+DRAFTS_URL = "https://x.com/compose/post/unsent/drafts"
+
+
+def _unsent(p, url=SCHEDULE_URL):
+    p.goto(url, wait_until="domcontentloaded")
     try:
         p.wait_for_selector('[data-testid="unsentTweet"]', timeout=15000)
     except Exception:
@@ -150,11 +265,11 @@ def _press(p, words):
     return False
 
 
-def delete_scheduled(self, words):
+def delete_scheduled(self, words, url=SCHEDULE_URL):
     """Delete scheduled posts. Each word must match exactly one schedule; otherwise nothing is touched."""
     p = self.page()
     try:
-        items = _unsent(p)
+        items = _unsent(p, url)
         hits = []
         for w in words:
             n = [i for i, t in enumerate(items) if w in t]
@@ -182,7 +297,54 @@ def delete_scheduled(self, words):
         else:
             _press(p, TEXT["delete"])
         time.sleep(2.5)
-        after = len(_unsent(p))
+        after = len(_unsent(p, url))
         return {"deleted": before - after}
     finally:
+        p.close()
+
+
+def drafts(self):
+    """This account's drafts, as the text X shows for each."""
+    p = self.page()
+    try:
+        return _unsent(p, DRAFTS_URL)
+    finally:
+        p.close()
+
+
+def delete_drafts(self, words):
+    return delete_scheduled(self, words, url=DRAFTS_URL)
+
+
+def reschedule(self, word, at):
+    """Move one scheduled post (picked by a word of its text) to another time."""
+    if isinstance(at, str):
+        at = datetime.strptime(at, "%Y-%m-%d %H:%M")
+    if at < datetime.now() + timedelta(minutes=LEAD_MIN):
+        raise UsageError(f"schedules must be at least {LEAD_MIN} minutes ahead")
+    p = self.page()
+    cap = graphql.Capture(p)
+    try:
+        items = _unsent(p)
+        hit = [i for i, t in enumerate(items) if word in t]
+        if len(hit) != 1:
+            raise UsageError(f"'{word}' matches {len(hit)} scheduled posts; it must match exactly one")
+        p.locator('[data-testid="unsentTweet"]').nth(hit[0]).click()
+        dlg = _dialog(p)
+        close = p.locator('[data-testid="tooltip-close-icon"]')
+        if close.count():
+            close.first.click()
+        dlg.locator('[data-testid="scheduleOption"]').click()
+        p.wait_for_selector(SEL["month"], timeout=20000)
+        for k, v in (("month", at.month), ("day", at.day), ("year", at.year), ("hour", at.hour), ("minute", at.minute)):
+            p.select_option(SEL[k], str(v))
+        p.click('[data-testid="scheduledConfirmationPrimaryAction"]')
+        p.wait_for_selector(SEL["month"], state="detached", timeout=20000)
+        n = len(cap.items)
+        dlg.locator('[data-testid="tweetButton"]').click()
+        if cap.wait_for(("EditScheduledTweet", "CreateScheduledTweet"), timeout=30, after=n) is None:
+            raise ActionFailed("X did not confirm the new time")
+        return {"scheduled": at.strftime("%Y-%m-%d %H:%M"), "result": "moved"}
+    finally:
+        cap.detach()
         p.close()

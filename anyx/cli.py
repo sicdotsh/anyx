@@ -10,18 +10,30 @@ read
   posts <handle> [-n N] [--replies|--media]
   search <query> [--tab latest|top|people|media] [-n N]
   home [--following] [-n N]
+  trends [--tab for_you|trending|news|sports|entertainment] [-n N]
   notifications [--mentions] [-n N]
   bookmarks [-n N] | likes [<handle>] [-n N]
   followers <handle> [-n N] | following <handle> [-n N]
   shot <post> [-o file.png]         screenshot of the post as X shows it
 
 write
-  post <text> [--quote <post>] [--reply <post>] [--media f ...] [--at "YYYY-MM-DD HH:MM"]
+  post <text> [--quote <post>] [--reply <post>] [--media f ...] [--alt t ...] [--at "YYYY-MM-DD HH:MM"]
+       [--poll "a|b|c" [--poll-days D] [--poll-hours H] [--poll-minutes M]]
+       [--who everyone|following|verified|mentioned] [--thread t2 t3 ...] [--draft]
   delete <post> ...
-  scheduled [--delete <text> ...]   list (or delete) scheduled posts
+  scheduled [--delete <text> ...] [--move <text> --at "YYYY-MM-DD HH:MM"]
+  drafts [--delete <text> ...]
   like | unlike | retweet | unretweet | bookmark | unbookmark | pin | unpin  <post> ...
   follow | unfollow | mute | unmute | block | unblock  <handle> ...
   profile [--name] [--bio] [--location] [--website] [--avatar f] [--banner f] [--drop-banner]
+
+settings
+  settings                          every setting, as X stores it
+  settings set <name> <value>       protected, protect_videos, media_tagging, media_tagging_from,
+                                    sensitive_media, quality_filter, personalize_location,
+                                    personalize_inferred, personalize_ads, grok_training,
+                                    grok_personalize, grok_history, language
+  muted [--add word] [--remove word]  muted words
 
 lists
   lists                             lists this account owns or follows
@@ -203,6 +215,10 @@ def _fmt(o):
         return _show_tweet(o)
     if isinstance(o, dict) and "handle" in o and "followers" in o:
         return _show_user(o)
+    if isinstance(o, dict) and "kind" in o and "users" in o:
+        return f"[{(o.get('time') or '')[:16]}] {o['kind']}: {o.get('text') or ''}"
+    if isinstance(o, dict) and "context" in o and "ai" in o:
+        return f"{o['name']}   ({o['context']})"
     if isinstance(o, dict) and "status" in o and "mine" in o:
         who = "me" if o["mine"] else (o.get("sender") or "?")
         return f"[{o.get('time') or ''}] {who}: {o.get('text') or ''}" + "".join(f"\n  [media] {m}" for m in o.get("media") or [])
@@ -231,19 +247,26 @@ def _parser():
     s = add("home"); s.add_argument("--following", action="store_true"); s.add_argument("-n", type=int, default=40)
     s = add("notifications"); s.add_argument("--mentions", action="store_true"); s.add_argument("-n", type=int, default=40)
     s = add("bookmarks"); s.add_argument("-n", type=int, default=40)
+    s = add("trends"); s.add_argument("--tab", default="trending"); s.add_argument("-n", type=int, default=30)
     s = add("likes"); s.add_argument("ref", nargs="?"); s.add_argument("-n", type=int, default=40)
     for name in ("followers", "following"):
         add(name, "ref").add_argument("-n", type=int, default=100)
     s = add("shot", "ref"); s.add_argument("-o", "--out")
     s = add("post", "text"); s.add_argument("--quote"); s.add_argument("--reply")
-    s.add_argument("--media", nargs="+"); s.add_argument("--at")
+    s.add_argument("--media", nargs="+"); s.add_argument("--at"); s.add_argument("--alt", nargs="+")
+    s.add_argument("--poll"); s.add_argument("--poll-days", type=int); s.add_argument("--poll-hours", type=int)
+    s.add_argument("--poll-minutes", type=int); s.add_argument("--who"); s.add_argument("--thread", nargs="+")
+    s.add_argument("--draft", action="store_true")
     for name in POST_ACTIONS:
         add(name).add_argument("refs", nargs="+")
     for name in USER_ACTIONS:
         add(name).add_argument("refs", nargs="+")
-    s = add("scheduled"); s.add_argument("--delete", nargs="+")
+    s = add("scheduled"); s.add_argument("--delete", nargs="+"); s.add_argument("--move"); s.add_argument("--at")
+    s = add("drafts"); s.add_argument("--delete", nargs="+")
     s = add("chat", "action"); s.add_argument("--pin")
     add("lists")
+    s = add("settings"); s.add_argument("args", nargs="*")
+    s = add("muted"); s.add_argument("--add"); s.add_argument("--remove")
     s = add("list", "action"); s.add_argument("args", nargs="*"); s.add_argument("--description", default="")
     s.add_argument("--public", action="store_true"); s.add_argument("-n", type=int, default=40)
     s = add("chats"); s.add_argument("--box", default="all"); s.add_argument("-n", type=int, default=30)
@@ -346,6 +369,8 @@ def _one(a, g, handle):
             out = x.home(limit=a.n, following=a.following)
         elif c == "notifications":
             out = x.notifications(limit=a.n, mentions=a.mentions)
+        elif c == "trends":
+            out = x.trends(tab=a.tab, limit=a.n)
         elif c == "bookmarks":
             out = x.bookmarks(limit=a.n)
         elif c == "likes":
@@ -356,10 +381,24 @@ def _one(a, g, handle):
             from .session import tweet_id
             out = {"file": x.shot(a.ref, a.out or f"{tweet_id(a.ref)}.png")}
         elif c == "post":
-            out = x.post(a.text.replace("\\n", "\n"), quote=a.quote, reply=a.reply, media=a.media, at=a.at)
+            poll = None
+            if a.poll:
+                poll = {"choices": [c.strip() for c in a.poll.split("|")], "days": a.poll_days,
+                        "hours": a.poll_hours, "minutes": a.poll_minutes}
+            out = x.post(a.text.replace("\\n", "\n"), quote=a.quote, reply=a.reply, media=a.media, at=a.at,
+                         alt=a.alt, poll=poll, who=a.who, thread=a.thread, draft=a.draft)
         elif c in POST_ACTIONS or c in USER_ACTIONS:
             out = [getattr(x, c)(r) for r in a.refs]
             out = out[0] if len(out) == 1 else out
+        elif c == "settings":
+            if not a.args:
+                out = x.settings()
+            elif a.args[0] == "set" and len(a.args) == 3:
+                out = x.set_setting(a.args[1], a.args[2])
+            else:
+                raise UsageError("settings | settings set <name> <value>")
+        elif c == "muted":
+            out = x.mute_word(a.add) if a.add else x.unmute_word(a.remove) if a.remove else x.muted_words()
         elif c == "lists":
             out = x.lists()
         elif c == "list":
@@ -387,7 +426,14 @@ def _one(a, g, handle):
         elif c == "dm":
             out = x.dm(a.to, a.text.replace("\\n", "\n"), media=a.media)
         elif c == "scheduled":
-            out = x.delete_scheduled(a.delete) if a.delete else x.scheduled()
+            if a.move:
+                if not a.at:
+                    raise UsageError("scheduled --move <text> --at \"YYYY-MM-DD HH:MM\"")
+                out = x.reschedule(a.move, a.at)
+            else:
+                out = x.delete_scheduled(a.delete) if a.delete else x.scheduled()
+        elif c == "drafts":
+            out = x.delete_drafts(a.delete) if a.delete else x.drafts()
         elif c == "profile":
             if not any([a.name, a.bio is not None, a.location, a.website, a.avatar, a.banner, a.drop_banner]):
                 out = x.user(x.me)
