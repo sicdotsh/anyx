@@ -25,6 +25,7 @@ def _post_action(self, ref, button, confirm=None, wait=None, done_button=None):
         b = art.locator(f'[data-testid="{button}"]').first
         if not b.count():
             raise UIChanged(f'no [data-testid="{button}"] on post {tid}')
+        self.before_write()
         n = len(cap.items)
         b.click()
         if confirm:
@@ -97,6 +98,7 @@ def delete(self, ref):
         if not item.count():
             p.keyboard.press("Escape")
             raise UIChanged(f"no delete entry in the menu of {tid} (is it this account's post?)")
+        self.before_write()
         n = len(cap.items)
         item.first.click()
         c = p.locator('[data-testid="confirmationSheetConfirm"]').first
@@ -129,6 +131,7 @@ def _pin(self, ref, testid, op):
             if menu.locator(f'[data-testid="{other}"]').count():
                 return {"id": tid, "result": "already"}
             raise UIChanged(f'no [data-testid="{testid}"] in the menu of {tid}')
+        self.before_write()
         n = len(cap.items)
         item.first.click()
         c = p.locator('[data-testid="confirmationSheetConfirm"]').first
@@ -196,6 +199,7 @@ def _account_action(self, ref, button, rest, confirm=False, state=None, want=Tru
             target = col.locator(f'[data-testid="{bt}"]')
             if not target.count():
                 raise UIChanged(f'no [data-testid="{bt}"] on the profile of @{u["handle"]}')
+        self.before_write()
         n = len(cap.rest)
         target.first.click()
         # Some of these ask "are you sure" and some do not, and X changes which. Confirm when asked.
@@ -275,6 +279,7 @@ def edit_profile(self, name=None, bio=None, location=None, website=None, avatar=
             if rm.count():
                 rm.first.click()
                 p.wait_for_timeout(800)
+        self.before_write()
         n = len(cap.rest)
         p.locator('[data-testid="Profile_Save_Button"]').first.click(timeout=20000)
         p.wait_for_timeout(1500)

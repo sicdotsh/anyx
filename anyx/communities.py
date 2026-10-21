@@ -83,6 +83,7 @@ def _membership(self, ref, join):
                 break
         if not btn:
             raise UIChanged(f"no {'Join' if join else 'Joined'} button on the community page")
+        self.before_write()
         n = len(cap.items)
         btn.click()
         p.wait_for_timeout(1500)

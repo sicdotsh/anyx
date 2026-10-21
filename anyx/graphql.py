@@ -62,9 +62,22 @@ class Capture:
         return [b for op, b in self.items if not names or op in names]
 
     def wait_for(self, names, timeout=30.0, after=0):
-        """Wait until a response whose operation is in `names` arrives (counting from index `after`)."""
-        end = time.monotonic() + timeout
+        """Wait until a response whose operation is in `names` arrives (counting from index `after`).
+        If the page was changed inside X's app and X answered from its cache (nothing fetched), the page
+        is loaded for real once, a third of the way into the wait."""
+        start = time.monotonic()
+        end = start + timeout
+        reloaded = False
         while time.monotonic() < end:
+            if not reloaded and getattr(self.page, "spa_url", None) and time.monotonic() - start > max(6, timeout / 3):
+                reloaded = True
+                url = self.page.spa_url
+                self.page.goto(url, wait_until="domcontentloaded")
+                try:
+                    self.page.evaluate("window.__anyx = 1")
+                except Exception:
+                    pass
+                self.page.spa_url = None
             for op, b in self.items[after:]:
                 if op in names:
                     return b

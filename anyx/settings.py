@@ -80,6 +80,7 @@ def _set_dms(self, value):
         if cur == value:
             return {"setting": "dms", "value": value, "result": "already"}
         row = p.locator('[data-testid="dm-container"] button').filter(has=p.locator('[data-slot="xds-list-label"]')).last
+        self.before_write()
         row.click()
         radios = p.locator("[role=radio]")
         radios.first.wait_for(state="visible", timeout=10000)
@@ -137,6 +138,7 @@ def set_setting(self, name, value):
             box = boxes.nth(where)
             if box.is_checked() == want:
                 return {"setting": name, "value": want, "result": "already"}
+            self.before_write()
             n = len(cap.rest) + len(cap.items)
             box.click(force=True)
             c = p.locator('[data-testid="confirmationSheetConfirm"]').first
@@ -159,6 +161,7 @@ def set_setting(self, name, value):
             r = radios.nth(opts.index(value))
             if r.is_checked():
                 return {"setting": name, "value": value, "result": "already"}
+            self.before_write()
             r.click(force=True)
             p.wait_for_timeout(2500)
             if not r.is_checked():
@@ -168,6 +171,7 @@ def set_setting(self, name, value):
             sel = col.locator("select").nth(where)
             if sel.input_value() == value:
                 return {"setting": name, "value": value, "result": "already"}
+            self.before_write()
             sel.select_option(value)
             save = col.locator('[data-testid="settingsDetailSave"]')
             if save.count():
@@ -208,6 +212,7 @@ def mute_word(self, word):
         save = col.locator('[data-testid="settingsDetailSave"]')
         if not save.count():
             raise UIChanged("no Save button for muted words")
+        self.before_write()
         n = len(cap.rest)
         save.first.click()
         b = cap.wait_rest("mutes/keywords/create", timeout=20, after=n)
@@ -237,6 +242,7 @@ def unmute_word(self, word):
                           'button[aria-label="ミュートを解除"], button[aria-label="Unmute"]')
         if not btn.count():
             btn = main.locator('[aria-label="ミュートを解除"], [aria-label="Unmute"]').nth(words.index(word))
+        self.before_write()
         n = len(cap.rest)
         btn.first.click()
         c = p.locator('[data-testid="confirmationSheetConfirm"]').first
@@ -275,6 +281,7 @@ def set_handle(self, new):
         save = p.locator('main [data-testid="settingsDetailSave"]').first
         if save.get_attribute("aria-disabled") == "true" or save.is_disabled():
             raise ActionFailed(f"X does not accept @{new} (taken or not allowed)")
+        self.before_write()
         n = len(cap.rest)
         save.click()
         b = cap.wait_rest("account/settings", timeout=20, after=n)

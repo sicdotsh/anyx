@@ -42,6 +42,7 @@ def add(handle, timeout=600):
             return {"user": handle, "result": "saved"}
         finally:
             drv.close()
+            drv.stop(handle)          # the login window; the next command starts the account's own browser
 
 
 def import_file(handle, path):

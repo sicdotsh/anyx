@@ -10,6 +10,7 @@ class CDP:
         self.browser = None
         self.ctx = None
         self.pages = []
+        self.fresh = False
 
     def open(self, pw, handle, account, cookies, headless=True):
         url = account.get("cdp")
@@ -38,3 +39,7 @@ class CDP:
 
     def cookies(self):
         return self.ctx.cookies("https://x.com") if self.ctx else []
+
+    @staticmethod
+    def stop(handle):
+        return False          # an attached browser belongs to whoever started it

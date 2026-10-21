@@ -184,6 +184,7 @@ def post(self, text, quote=None, reply=None, media=None, at=None, alt=None, poll
                 const b = ds[ds.length - 1]?.querySelector('[data-testid="tweetButton"]');
                 return b && b.getAttribute('aria-disabled') !== 'true';
             }""", timeout=UPLOAD_TIMEOUT * 1000)
+        self.before_write()
         if draft:
             n = len(cap.items)
             dlg.locator('[data-testid="app-bar-close"]').first.click()
@@ -287,6 +288,7 @@ def delete_scheduled(self, words, url=SCHEDULE_URL):
         if not hits:
             return {"deleted": 0}
         before = len(items)
+        self.before_write()
         if not _press(p, TEXT["edit"]):
             raise UIChanged("no Edit button on the scheduled list")
         p.wait_for_timeout(1500)
@@ -348,6 +350,7 @@ def reschedule(self, word, at):
             p.select_option(SEL[k], str(v))
         p.click('[data-testid="scheduledConfirmationPrimaryAction"]')
         p.wait_for_selector(SEL["month"], state="detached", timeout=20000)
+        self.before_write()
         n = len(cap.items)
         dlg.locator('[data-testid="tweetButton"]').click()
         cap.confirm(("EditScheduledTweet", "CreateScheduledTweet"), "the new time", after=n, timeout=30)

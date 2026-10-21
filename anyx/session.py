@@ -28,11 +28,33 @@ def handle_of(ref):
     return (m.group(1) if m else s).lstrip("@")
 
 
+class Tab:
+    """The account's one tab. Everything anyx does happens in it, like a person with one tab open.
+    close() is a no-op so code written for throwaway pages keeps the tab."""
+
+    def __init__(self, page):
+        object.__setattr__(self, "_page", page)
+        object.__setattr__(self, "spa_url", None)
+
+    def __getattr__(self, name):
+        return getattr(self._page, name)
+
+    def __setattr__(self, name, value):
+        if name in ("spa_url",):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._page, name, value)
+
+    def close(self):
+        pass
+
+
 class Session:
-    def __init__(self, handle=None, headless=True, browser=None, verify=True):
+    def __init__(self, handle=None, headless=True, browser=None, verify=True, force=False):
         self.handle = handle.lstrip("@").lower() if handle else None
         self.headless = headless
         self.verify = verify
+        self.force = force
         self.account = config.account(self.handle or "")
         if browser:
             self.account["browser"] = browser
@@ -40,9 +62,18 @@ class Session:
         self._pw = None
         self.ctx = None
         self.me = None
+        self._tab = None
 
     def __enter__(self):
         from playwright.sync_api import sync_playwright
+        from . import run
+        from .errors import RateLimited
+        c = run.cooling(self.handle) if self.handle else None
+        if c and not self.force:
+            import time as _t
+            left = int(c[0] - _t.time())
+            raise RateLimited(f"@{self.handle} is resting for {left // 60}m{left % 60:02d}s after: {c[1]} "
+                              f"(anyx does nothing as this account until then)", c[0])
         cookies = vault.load(self.handle) if self.handle else None
         if self.handle and cookies is None and self.account["browser"] != "cdp":
             raise UsageError(f"no cookies for @{self.handle} (anyx accounts add {self.handle})")
@@ -53,33 +84,90 @@ class Session:
             if self.verify:
                 self._check(cookies)
         except BaseException:
-            self.__exit__()
+            self.__exit__(None, None, None)
             raise
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, exc_type=None, exc=None, tb=None):
+        from . import run
+        from .errors import ActionFailed, RateLimited
         try:
-            if self.driver:
-                self.driver.close()
+            if self.handle and isinstance(exc, RateLimited) and not str(exc).startswith(f"@{self.handle} is resting"):
+                run.cool(self.handle, until=(exc.reset + 60) if exc.reset else None, reason=str(exc))
+            elif self.handle and isinstance(exc, ActionFailed) and "refused" in str(exc) and "duplicate" not in str(exc):
+                run.cool(self.handle, seconds=run.COOL_REFUSED, reason=str(exc))
+            elif self.handle and isinstance(exc, SessionExpired):
+                run.cool(self.handle, seconds=24 * 3600, reason=str(exc))
         finally:
-            if self._pw:
-                self._pw.stop()
-                self._pw = None
+            try:
+                if self.driver:
+                    self.driver.close()
+            finally:
+                if self._pw:
+                    self._pw.stop()
+                    self._pw = None
 
-    # ---- pages ----
+    # ---- the tab ----
 
     def page(self):
-        p = self.ctx.new_page()
-        p.set_viewport_size({"width": 1280, "height": 1000})
-        return p
+        """The account's tab (the same one every time)."""
+        if self._tab is None:
+            pages = [p for p in self.ctx.pages if p.url.startswith("https://x.com")] or self.ctx.pages
+            pg = pages[0] if pages else self.ctx.new_page()
+            pg.set_viewport_size({"width": 1280, "height": 1000})
+            self._tab = Tab(pg)
+        return self._tab
+
+    def scratch(self):
+        """A separate throwaway page, for things that are not X (rendering an image, ...)."""
+        return self.ctx.new_page()
+
+    def before_write(self):
+        from . import run
+        if self.handle:
+            run.pace(self.handle, write=True)
 
     def goto(self, page, url):
-        page.goto(url, wait_until="domcontentloaded")
+        """Show `url` in the tab. When X's app is already running in it, the page changes inside the app
+        (as clicking a link does) instead of reloading it, which costs a fraction of the requests."""
+        from . import run
+        if self.handle:
+            run.pace(self.handle)
+        booted = False
+        try:
+            booted = page.url.startswith("https://x.com/") and page.evaluate("window.__anyx === 1")
+        except Exception:
+            booted = False
+        if booted and url.startswith("https://x.com/") and "/i/flow/" not in url:
+            path = url[len("https://x.com"):]
+            page.evaluate("p => { history.pushState({}, '', p); dispatchEvent(new PopStateEvent('popstate', {state: {}})); }", path)
+            page.wait_for_timeout(400)
+            if isinstance(page, Tab):
+                page.spa_url = url
+        else:
+            page.goto(url, wait_until="domcontentloaded")
+            try:
+                page.evaluate("window.__anyx = 1")
+            except Exception:
+                pass
+            if isinstance(page, Tab):
+                page.spa_url = None
         if "/login" in page.url or "/i/flow/login" in page.url:
             raise SessionExpired(f"@{self.handle or '?'} is logged out (anyx accounts add {self.handle or '<handle>'})")
         if "/account/access" in page.url:
             raise SessionExpired(f"@{self.handle or '?'} is locked by X ({page.url})")
         return page
+
+    def reload(self, page):
+        """Load the current address for real (used when the app showed cached data and fetched nothing)."""
+        url = getattr(page, "spa_url", None) or page.url
+        page.goto(url, wait_until="domcontentloaded")
+        try:
+            page.evaluate("window.__anyx = 1")
+        except Exception:
+            pass
+        if isinstance(page, Tab):
+            page.spa_url = None
 
     def _check(self, cookies):
         """Make sure the browser is the account asked for, before anything is done.
@@ -100,8 +188,7 @@ class Session:
         """The handle the browser is logged in as, asked from X itself (its Viewer query)."""
         from . import graphql
         from .errors import RateLimited
-        p = self.ctx.pages[0] if self.ctx.pages else self.page()
-        p.set_viewport_size({"width": 1280, "height": 1000})   # narrower windows fold the side bar away
+        p = self.page()
         cap = graphql.Capture(p)
         try:
             self.goto(p, "https://x.com/home")

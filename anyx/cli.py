@@ -60,12 +60,17 @@ accounts
   accounts import <handle> <cookies.json>
   accounts harvest --browser adspower --profile <name>   store every account logged into that browser
   accounts set <handle> [--browser NAME] [--profile NAME] [--cdp URL] [--proxy URL]
+  status [<handle>...]                       which accounts have a browser open, which are resting
+  stop [<handle>...|all]                     close the browsers anyx left open
   accounts check <handle>|all                ok, expired, locked, suspended, rate_limited (and whether its posts show in search)
   accounts login <handle>|- --file creds.tsv [--browser NAME]   log in with password (+ TOTP); one account or the whole file
   whoami
 
 <post> is a URL or an id; <handle> is a handle, @handle or profile URL.
---as picks the account (default: the only one, or ANYX_ACCOUNT); a,b,c or all runs the command as each,
+anyx acts like one person with one tab: each account's browser stays open between commands, pages
+change inside X's app instead of reloading, there is a pause before every page change and a longer
+one before every write, and the first 429 or unexplained refusal puts the account to rest (no retries;
+--force overrides). --as picks the account (default: the only one, or ANYX_ACCOUNT); a,b,c or all runs the command as each,
 N at a time (-j, default 4). --json prints JSON. --show opens a visible window. --wait sleeps through
 rate limits until X says they lift, then carries on. Exit codes: 0 ok, 2 usage, 3 logged out, 4 wrong account, 5 X changed its page,
 6 rate limited, 7 not found, 8 X did not confirm.
@@ -85,7 +90,7 @@ USER_ACTIONS = ("follow", "unfollow", "mute", "unmute", "block", "unblock")
 
 
 def _globals(argv):
-    g = {"as": None, "json": False, "show": False, "browser": None, "wait": False, "jobs": 4}
+    g = {"as": None, "json": False, "show": False, "browser": None, "wait": False, "jobs": 4, "force": False}
     rest = []
     it = iter(argv)
     for a in it:
@@ -99,6 +104,8 @@ def _globals(argv):
             g["show"] = True
         elif a == "--wait":
             g["wait"] = True
+        elif a == "--force":
+            g["force"] = True
         elif a in ("-j", "--jobs"):
             g["jobs"] = int(next(it, "4"))
         elif a == "--browser" and (not rest or rest[0] != "accounts"):
@@ -287,6 +294,8 @@ def _parser():
         s.add_argument(f)
     s.add_argument("--drop-banner", action="store_true")
     add("whoami")
+    add("stop").add_argument("refs", nargs="*")
+    add("status").add_argument("refs", nargs="*")
     s = add("accounts", "action")
     s.add_argument("args", nargs="*")
     for f in ("--browser", "--profile", "--cdp", "--proxy", "--file"):
@@ -310,6 +319,24 @@ def run(argv):
     if not a.cmd:
         raise UsageError("no command (anyx --help)")
 
+    if a.cmd in ("stop", "status"):
+        from . import run as _run
+        hs = vault.handles() if (not a.refs or a.refs == ["all"]) else [h.lstrip("@").lower() for h in a.refs]
+        rows = []
+        for h in hs:
+            st = _run.load(h)
+            if a.cmd == "stop":
+                kind = (st.get("browser") or {}).get("kind")
+                done = browsers.get(kind if kind in browsers.NAMES else "chromium").stop(h) if kind else False
+                if done:
+                    rows.append({"user": h, "result": "stopped"})
+            else:
+                import time as _t
+                c = _run.cooling(h)
+                rows.append({"user": h, "browser": (st.get("browser") or {}).get("kind") or "-",
+                             "resting": f"{int((c[0] - _t.time()) // 60)}m: {c[1]}" if c else "-"})
+        _print(rows, g["json"])
+        return 0
     if a.cmd == "accounts":
         act, rest = a.action, a.args
         if act == "list":
@@ -375,7 +402,7 @@ def _with_wait(fn, g, tries=4):
 
 
 def _one(a, g, handle):
-    with Session(handle, headless=not g["show"], browser=g["browser"]) as x:
+    with Session(handle, headless=not g["show"], browser=g["browser"], force=g["force"]) as x:
         c = a.cmd
         if c == "whoami":
             out = {"user": x.whoami(), "browser": x.account["browser"]}

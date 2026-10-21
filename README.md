@@ -57,6 +57,15 @@ anyx --as alice chat setup --pin 1234
 
 X only delivers messages between accounts that follow each other, or to accounts that open their requests (`anyx settings set dms everyone`).
 
+## How it behaves
+
+anyx acts like one person with one tab, because that is what keeps accounts healthy:
+
+- Each account's browser stays open between commands (`anyx status`, `anyx stop`). The first command starts it; later ones reuse the same tab.
+- Pages change inside X's app, the way clicking a link does, instead of reloading it. A reload boots X's whole app (about 30 requests); a change inside it costs 6 to 12.
+- There is a pause of a few seconds before every page change, and a longer one before every write.
+- The first sign of X pushing back (a 429, or a refusal X does not explain) puts the account to rest: anyx refuses to act as it until the time X gave, or for a while, and never retries on its own. `--force` overrides; don't.
+
 ## Accounts
 
 anyx keeps each account's x.com cookies in `~/.anyx/accounts/<handle>.json`, one file per account. Which account a browser shows is decided by which cookies are poured into it, never by X's account switcher, so one browser profile can serve any number of accounts.
@@ -115,7 +124,7 @@ anyx exits with a code that says what happened, so scripts can react:
 | 3 | the account is logged out or locked (`anyx accounts add <handle>` again) |
 | 4 | the browser showed a different account; nothing was touched |
 | 5 | something anyx relies on was not on the page: X changed its layout |
-| 6 | rate limited by X; wait about 15 minutes |
+| 6 | rate limited by X, or the account is resting after one (`anyx status` says until when) |
 | 7 | the post or account does not exist or is not visible |
 | 8 | X did not confirm the change, or refused it (its own reason is printed, e.g. a duplicate post) |
 

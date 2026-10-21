@@ -46,6 +46,7 @@ class AdsPower:
     def __init__(self):
         self.uid = None
         self.ctx = None
+        self.fresh = False
         self.api = DEFAULT_API
         self.key = None
 
@@ -82,30 +83,52 @@ class AdsPower:
         raise UsageError(f"no AdsPower profile named {name}")
 
     def open(self, pw, handle, account, cookies, headless=True):
+        """Attach to the profile if it is already open (left open by an earlier command, or by hand);
+        start it otherwise. It is left open afterwards."""
+        from .. import run
         self._setup(account)
         if not account.get("profile"):
             raise UsageError(f"@{handle} uses adspower but has no profile "
                              f"(anyx accounts set {handle} --browser adspower --profile <name>)")
         self.uid = self.profile_id(account["profile"])
-        if cookies:
-            r = self.call("/api/v1/user/update", method="POST", user_id=self.uid, cookie=json.dumps(cookies))
+        st = self.call("/api/v1/browser/active", user_id=self.uid)
+        ws = ((st.get("data") or {}).get("ws") or {}).get("puppeteer") if (st.get("data") or {}).get("status") == "Active" else None
+        if not ws:
+            if cookies:
+                r = self.call("/api/v1/user/update", method="POST", user_id=self.uid, cookie=json.dumps(cookies))
+                if r.get("code") != 0:
+                    raise AnyxError(f"AdsPower refused the cookies: {r.get('msg')}")
+                time.sleep(1.5)
+            r = self.call("/api/v1/browser/start", user_id=self.uid, headless="1" if headless else "0", open_tabs=1)
             if r.get("code") != 0:
-                raise AnyxError(f"AdsPower refused the cookies: {r.get('msg')}")
-            time.sleep(1.5)
-        r = self.call("/api/v1/browser/start", user_id=self.uid, headless="1" if headless else "0", open_tabs=1)
-        if r.get("code") != 0:
-            raise AnyxError(f"AdsPower could not start {account['profile']}: {r.get('msg')}")
-        browser = pw.chromium.connect_over_cdp(r["data"]["ws"]["puppeteer"])
+                raise AnyxError(f"AdsPower could not start {account['profile']}: {r.get('msg')}")
+            ws = r["data"]["ws"]["puppeteer"]
+            self.fresh = True
+        browser = pw.chromium.connect_over_cdp(ws)
         self.ctx = browser.contexts[0]
+        if cookies:
+            have = {c["name"]: c["value"] for c in self.ctx.cookies("https://x.com")}
+            if have.get("auth_token") != {c["name"]: c["value"] for c in cookies}.get("auth_token"):
+                self.ctx.clear_cookies(domain=".x.com")
+                self.ctx.add_cookies(cookies)
+                self.fresh = True
+        run.save(handle, browser={"kind": "adspower", "profile": account["profile"], "user_id": self.uid})
         return self.ctx
 
     def close(self):
-        if self.uid:
-            try:
-                self.call("/api/v1/browser/stop", user_id=self.uid)
-            except Exception:
-                pass
+        # the profile stays open for the next command; `anyx stop` closes it
         self.ctx = None
 
     def cookies(self):
         return self.ctx.cookies("https://x.com") if self.ctx else []
+
+    @staticmethod
+    def stop(handle):
+        from .. import config, run
+        info = run.load(handle).get("browser") or {}
+        if info.get("user_id"):
+            a = AdsPower()
+            a._setup(config.account(handle))
+            a.call("/api/v1/browser/stop", user_id=info["user_id"])
+        run.forget(handle, "browser")
+        return bool(info)

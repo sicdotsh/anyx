@@ -192,6 +192,7 @@ def dm(self, to, text=None, media=None):
             p.wait_for_timeout(3000)
         if text:
             box.fill(text)
+        self.before_write()
         n = len(cap.items)
         p.locator('[data-testid="dm-composer-send-button"]').first.click()
         cap.confirm(("SendMessageCreateMutation",), "the message", after=n, timeout=30)

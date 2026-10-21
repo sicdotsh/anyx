@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import anyx  # noqa: E402
 
-PAUSE = 3.0
+PAUSE = 0.0          # anyx paces itself
 results = []
 
 
@@ -34,6 +34,16 @@ def step(name, fn, expect=None, soft=False):
         if expect is not None:
             ok = expect(out)
         note = _brief(out)
+    except (anyx.RateLimited, anyx.SessionExpired) as e:
+        print(f"STOP {name}: {type(e).__name__}: {e}", flush=True)
+        print("X is pushing back; the test stops here instead of pressing on.")
+        raise SystemExit(finish(None) or 3)
+    except anyx.ActionFailed as e:
+        if "refused" in str(e) and "duplicate" not in str(e):
+            print(f"STOP {name}: {e}", flush=True)
+            print("X refused without a clear reason; the test stops here instead of pressing on.")
+            raise SystemExit(finish(None) or 3)
+        ok, out, note = False, None, f"{type(e).__name__}: {e}"
     except Exception as e:  # noqa: BLE001
         ok, out, note = False, None, f"{type(e).__name__}: {e}"
         if os.environ.get("ANYX_DEBUG"):
@@ -122,7 +132,7 @@ def main():
 
         # posting, then cleaning up
         img = os.path.join(tmp, "card.png")
-        pg = x.page()
+        pg = x.scratch()
         pg.set_content(f"<body style='margin:0;background:#111;color:#fff;font:64px sans-serif;"
                        f"display:flex;align-items:center;justify-content:center;width:800px;height:800px'>anyx {tag}</body>")
         pg.set_viewport_size({"width": 800, "height": 800})
@@ -214,7 +224,8 @@ def main():
 
 def finish(tmp):
     import shutil
-    shutil.rmtree(tmp, ignore_errors=True)
+    if tmp:
+        shutil.rmtree(tmp, ignore_errors=True)
     bad = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(bad)}/{len(results)} passed")
     for name, _, _, note in bad:

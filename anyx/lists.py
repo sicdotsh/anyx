@@ -98,6 +98,7 @@ def list_create(self, name, description="", private=True):
         nxt = _button(layer, "次へ", "Next")
         if not nxt:
             raise UIChanged("no Next button on the list form")
+        self.before_write()
         n = len(cap.items)
         nxt.click()
         b = cap.confirm(("CreateList",), "CreateList", after=n)
@@ -141,6 +142,7 @@ def _membership(self, list_ref, who, add):
         save = _button(p.locator("#layers"), "保存", "Save")
         if not save:
             raise UIChanged("no Save button in the list picker")
+        self.before_write()
         n = len(cap.items)
         save.click()
         op = "ListAddMember" if add else "ListRemoveMember"
@@ -190,6 +192,7 @@ def list_delete(self, list_ref):
         btn.click()
         c = p.locator('[data-testid="confirmationSheetConfirm"]').first
         c.wait_for(state="visible", timeout=15000)
+        self.before_write()
         n = len(cap.items)
         c.click()
         cap.confirm(("DeleteList",), "DeleteList", after=n, timeout=20)

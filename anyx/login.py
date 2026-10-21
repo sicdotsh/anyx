@@ -145,3 +145,5 @@ def login(handle, password, secret=None, browser="chromium", headless=True, wait
             return {"user": who, "result": "logged in"}
         finally:
             drv.close()
+            if acct["browser"] in ("chromium", "chrome"):
+                drv.stop(handle.lower())
