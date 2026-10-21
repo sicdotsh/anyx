@@ -25,8 +25,12 @@ class UIChanged(AnyxError):
 
 
 class RateLimited(AnyxError):
-    """X answered 429 or showed a rate-limit notice."""
+    """X answered 429. `reset` is the epoch second X said the limit lifts (None when not given)."""
     code = 6
+
+    def __init__(self, msg, reset=None):
+        super().__init__(msg)
+        self.reset = reset
 
 
 class NotFound(AnyxError):

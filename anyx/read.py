@@ -19,7 +19,7 @@ def _collect(self, url, ops, limit=40, pick=None, scrolls=40, first_wait=30):
         if cap.wait_for(ops, timeout=first_wait) is None:
             if "Viewer" in cap.limited:
                 from .errors import RateLimited
-                raise RateLimited("X answered 429: this account is rate limited, wait ~15 minutes")
+                raise cap.limit_error("Viewer")
             raise NotFound(f"nothing loaded at {url} (no {', '.join(ops)})")
         p.wait_for_timeout(1200)
         pick = pick or (lambda tw, us: tw)

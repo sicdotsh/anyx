@@ -20,6 +20,7 @@ class Capture:
         self.items = []          # (operation, json)
         self.rest = []           # (path, json)
         self.limited = []        # operations (or REST paths) X answered 429 for
+        self.reset = None        # epoch second the limit lifts, from x-rate-limit-reset
         page.on("response", self._on)
 
     @staticmethod
@@ -33,6 +34,10 @@ class Capture:
             return
         if r.status == 429:
             self.limited.append(self._name(url))
+            try:
+                self.reset = max(self.reset or 0, int(r.headers.get("x-rate-limit-reset") or 0)) or None
+            except (TypeError, ValueError):
+                pass
             return
         try:
             body = r.json()
@@ -65,9 +70,15 @@ class Capture:
                     return b
             hit = [n for n in self.limited if n in names]
             if hit:
-                raise RateLimited(f"X answered 429 for {hit[0]} (rate limited; wait ~15 minutes)")
+                raise self.limit_error(hit[0])
             self.page.wait_for_timeout(200)
         return None
+
+    def limit_error(self, what):
+        if self.reset:
+            left = max(0, int(self.reset - time.time()))
+            return RateLimited(f"X answered 429 for {what}; the limit lifts in {left // 60}m{left % 60:02d}s", self.reset)
+        return RateLimited(f"X answered 429 for {what} (rate limited; usually ~15 minutes)")
 
     def wait_rest(self, path_part, timeout=30.0, after=0):
         end = time.monotonic() + timeout

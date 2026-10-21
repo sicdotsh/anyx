@@ -107,7 +107,7 @@ class Session:
             self.goto(p, "https://x.com/home")
             b = cap.wait_for(("Viewer", "ViewerAccountSync"), timeout=30)
             if b is None and any(n in ("Viewer",) for n in cap.limited):
-                raise RateLimited("X answered 429 for Viewer: this account is rate limited, wait ~15 minutes")
+                raise cap.limit_error("Viewer")
             _, us = graphql.walk([b] if b else [])
             if us and us[0].get("handle"):
                 return us[0]["handle"]
@@ -118,7 +118,7 @@ class Session:
                 if "/login" in p.url or "/i/flow/login" in p.url:
                     raise SessionExpired("logged out")
                 if cap.limited:
-                    raise RateLimited(f"X answered 429 ({cap.limited[0]}): rate limited, wait ~15 minutes")
+                    raise cap.limit_error(cap.limited[0])
                 raise UIChanged("could not find who is logged in on the home page")
             return (link.get_attribute("href") or "").strip("/")
         finally:
@@ -146,3 +146,5 @@ class Session:
     from .act import (like, unlike, retweet, unretweet, bookmark, unbookmark, delete,  # noqa: E402
                       follow, unfollow, mute, unmute, block, unblock, pin, unpin, edit_profile)
     from .compose import post, scheduled, delete_scheduled  # noqa: E402
+    from .chat import chat_setup, chats, messages, dm  # noqa: E402
+    from .lists import lists, list_create, list_add, list_remove, list_posts, list_members, list_delete  # noqa: E402

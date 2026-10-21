@@ -1,6 +1,6 @@
 """anyx — use X from any browser, as any of your accounts. No API keys.
 
-usage: anyx [--as HANDLE] [--json] [--show] [--browser NAME] <command> ...
+usage: anyx [--as HANDLE|a,b,c|all] [--json] [--show] [--wait] [-j N] [--browser NAME] <command> ...
 
 read
   tweet <post>                      one post with its counts and media
@@ -23,6 +23,19 @@ write
   follow | unfollow | mute | unmute | block | unblock  <handle> ...
   profile [--name] [--bio] [--location] [--website] [--avatar f] [--banner f] [--drop-banner]
 
+lists
+  lists                             lists this account owns or follows
+  list create <name> [--description t] [--public]
+  list add|remove <list> <handle>   <list> is an id, URL, or the name of one of your lists
+  list posts|members <list> [-n N]
+  list delete <list>
+
+chat
+  chat setup --pin NNNN             set (or enter on this browser) the chat passcode
+  chats [--box all|unread|direct|groups|requests] [-n N]
+  messages <handle|conversation> [-n N]
+  dm <handle|conversation> <text> [--media f ...]
+
 accounts
   accounts list
   accounts add <handle>                      log in by hand once; anyx keeps the cookies
@@ -33,8 +46,9 @@ accounts
   whoami
 
 <post> is a URL or an id; <handle> is a handle, @handle or profile URL.
---as picks the account (default: the only one, or ANYX_ACCOUNT). --json prints JSON. --show opens a
-visible window. Exit codes: 0 ok, 2 usage, 3 logged out, 4 wrong account, 5 X changed its page,
+--as picks the account (default: the only one, or ANYX_ACCOUNT); a,b,c or all runs the command as each,
+N at a time (-j, default 4). --json prints JSON. --show opens a visible window. --wait sleeps through
+rate limits until X says they lift, then carries on. Exit codes: 0 ok, 2 usage, 3 logged out, 4 wrong account, 5 X changed its page,
 6 rate limited, 7 not found, 8 X did not confirm.
 """
 
@@ -52,7 +66,7 @@ USER_ACTIONS = ("follow", "unfollow", "mute", "unmute", "block", "unblock")
 
 
 def _globals(argv):
-    g = {"as": None, "json": False, "show": False, "browser": None}
+    g = {"as": None, "json": False, "show": False, "browser": None, "wait": False, "jobs": 4}
     rest = []
     it = iter(argv)
     for a in it:
@@ -64,11 +78,74 @@ def _globals(argv):
             g["json"] = True
         elif a == "--show":
             g["show"] = True
+        elif a == "--wait":
+            g["wait"] = True
+        elif a in ("-j", "--jobs"):
+            g["jobs"] = int(next(it, "4"))
         elif a == "--browser" and (not rest or rest[0] != "accounts"):
             g["browser"] = next(it, None)
         else:
             rest.append(a)
     return g, rest
+
+
+def _accounts(g):
+    """--as a,b,c or --as all. None when only one account is meant."""
+    h = g["as"]
+    if not h or ("," not in h and h != "all"):
+        return None
+    if h == "all":
+        return vault.handles()
+    return [x.strip().lstrip("@").lower() for x in h.split(",") if x.strip()]
+
+
+def _fan_out(handles, argv, g):
+    """Run the same command as each account, in parallel. Accounts that share one browser profile
+    run one after another, since a profile can only be open once."""
+    import subprocess
+    import threading
+    groups = {}
+    for h in handles:
+        a = config.account(h)
+        key = (a["browser"], a.get("profile") or a.get("cdp") or h)
+        groups.setdefault(key, []).append(h)
+    results = {}
+    sem = threading.Semaphore(max(1, g["jobs"]))
+    extra = (["--show"] if g["show"] else []) + (["--wait"] if g["wait"] else []) + \
+            (["--browser", g["browser"]] if g["browser"] else [])
+
+    def run_group(hs):
+        with sem:
+            for h in hs:
+                r = subprocess.run([sys.executable, "-m", "anyx", "--as", h, "--json", *extra, *argv],
+                                   capture_output=True, text=True)
+                try:
+                    out = json.loads(r.stdout) if r.stdout.strip() else None
+                except json.JSONDecodeError:
+                    out = r.stdout.strip()
+                results[h] = {"account": h, "ok": r.returncode == 0, "code": r.returncode,
+                              "result": out, "error": r.stderr.strip().removeprefix("anyx: ") or None}
+                if not g["json"]:
+                    mark = "ok  " if r.returncode == 0 else f"E{r.returncode:<3}"
+                    print(f"{mark} @{h}  {(results[h]['error'] or _brief(out))}", flush=True)
+
+    ts = [threading.Thread(target=run_group, args=(hs,)) for hs in groups.values()]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    rows = [results[h] for h in handles if h in results]
+    if g["json"]:
+        print(json.dumps(rows, ensure_ascii=False, indent=1))
+    return 0 if all(r["ok"] for r in rows) else 1
+
+
+def _brief(o):
+    if isinstance(o, list):
+        return f"{len(o)} items"
+    if isinstance(o, dict):
+        return "  ".join(f"{k}={o[k]}" for k in list(o)[:4])
+    return str(o)[:100]
 
 
 def _account(g):
@@ -126,6 +203,9 @@ def _fmt(o):
         return _show_tweet(o)
     if isinstance(o, dict) and "handle" in o and "followers" in o:
         return _show_user(o)
+    if isinstance(o, dict) and "status" in o and "mine" in o:
+        who = "me" if o["mine"] else (o.get("sender") or "?")
+        return f"[{o.get('time') or ''}] {who}: {o.get('text') or ''}" + "".join(f"\n  [media] {m}" for m in o.get("media") or [])
     if isinstance(o, dict):
         return "  ".join(f"{k}={v}" for k, v in o.items())
     return str(o)
@@ -162,6 +242,13 @@ def _parser():
     for name in USER_ACTIONS:
         add(name).add_argument("refs", nargs="+")
     s = add("scheduled"); s.add_argument("--delete", nargs="+")
+    s = add("chat", "action"); s.add_argument("--pin")
+    add("lists")
+    s = add("list", "action"); s.add_argument("args", nargs="*"); s.add_argument("--description", default="")
+    s.add_argument("--public", action="store_true"); s.add_argument("-n", type=int, default=40)
+    s = add("chats"); s.add_argument("--box", default="all"); s.add_argument("-n", type=int, default=30)
+    s = add("messages", "ref"); s.add_argument("-n", type=int, default=50)
+    s = add("dm", "to", "text"); s.add_argument("--media", nargs="+")
     s = add("profile")
     for f in ("--name", "--bio", "--location", "--website", "--avatar", "--banner"):
         s.add_argument(f)
@@ -213,7 +300,32 @@ def run(argv):
         _print(out, g["json"])
         return 0
 
+    many = _accounts(g)
+    if many is not None:
+        return _fan_out(many, argv, g)
     handle = _account(g)
+    if g["wait"]:
+        return _with_wait(lambda: _one(a, g, handle), g)
+    return _one(a, g, handle)
+
+
+def _with_wait(fn, g, tries=4):
+    """On a rate limit, sleep until X says it lifts (or 15 minutes), then try again."""
+    import time
+    from .errors import RateLimited
+    for i in range(tries):
+        try:
+            return fn()
+        except RateLimited as e:
+            if i == tries - 1:
+                raise
+            wait = (e.reset - time.time() + 10) if e.reset else 15 * 60
+            wait = min(max(wait, 30), 30 * 60)
+            print(f"anyx: rate limited; waiting {int(wait)}s", file=sys.stderr, flush=True)
+            time.sleep(wait)
+
+
+def _one(a, g, handle):
     with Session(handle, headless=not g["show"], browser=g["browser"]) as x:
         c = a.cmd
         if c == "whoami":
@@ -248,6 +360,32 @@ def run(argv):
         elif c in POST_ACTIONS or c in USER_ACTIONS:
             out = [getattr(x, c)(r) for r in a.refs]
             out = out[0] if len(out) == 1 else out
+        elif c == "lists":
+            out = x.lists()
+        elif c == "list":
+            act, r = a.action, a.args
+            if act == "create" and r:
+                out = x.list_create(r[0], a.description, private=not a.public)
+            elif act in ("add", "remove") and len(r) == 2:
+                out = getattr(x, "list_" + act)(r[0], r[1])
+            elif act == "posts" and r:
+                out = x.list_posts(r[0], limit=a.n)
+            elif act == "members" and r:
+                out = x.list_members(r[0], limit=a.n)
+            elif act == "delete" and r:
+                out = x.list_delete(r[0])
+            else:
+                raise UsageError("list create <name> | add|remove <list> <handle> | posts|members <list> | delete <list>")
+        elif c == "chat":
+            if a.action != "setup" or not a.pin:
+                raise UsageError("chat setup --pin NNNN")
+            out = x.chat_setup(a.pin)
+        elif c == "chats":
+            out = x.chats(limit=a.n, box=a.box)
+        elif c == "messages":
+            out = x.messages(a.ref, limit=a.n)
+        elif c == "dm":
+            out = x.dm(a.to, a.text.replace("\\n", "\n"), media=a.media)
         elif c == "scheduled":
             out = x.delete_scheduled(a.delete) if a.delete else x.scheduled()
         elif c == "profile":
