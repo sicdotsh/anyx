@@ -57,6 +57,8 @@ anyx --as alice chat setup --pin 1234
 
 X only delivers messages between accounts that follow each other, or to accounts that open their requests (`anyx settings set dms everyone`).
 
+The chat keys live in the browser, one set per browser profile. When several accounts share one profile and anyx switches between them, it clears x.com's storage on the switch and enters the next account's passcode, once; a wrong passcode is reported and never retried, because X destroys the keys after too many.
+
 ## How it behaves
 
 - Each account's browser stays open between commands (`anyx status`, `anyx stop`). The first command starts it; later ones reuse the same tab.

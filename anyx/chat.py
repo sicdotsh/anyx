@@ -35,32 +35,76 @@ def _save_pin(handle, pin):
 
 
 def _type_pin(p, pin):
-    p.locator('[data-testid="pin-code-input-container"]').first.wait_for(state="visible", timeout=20000)
-    p.locator('[data-testid="pin-code-input-container"] input, [data-testid="pin-code-input-container"]').first.click()
-    p.keyboard.type(pin, delay=120)
-    p.wait_for_timeout(1500)
+    """Enter the 4 digits, one per box (X shows four single-digit inputs)."""
+    box = p.locator('[data-testid="pin-code-input-container"]').first
+    box.wait_for(state="visible", timeout=20000)
+    inputs = box.locator("input")
+    if inputs.count() >= len(pin):
+        for i, d in enumerate(pin):
+            inputs.nth(i).fill(d)
+            p.wait_for_timeout(150)
+    else:
+        box.click()
+        p.keyboard.type(pin, delay=150)
+
+
+WRONG_PIN = ("正しくありません", "間違", "Incorrect", "incorrect", "Wrong", "wrong")
+
+
+def _await_pin_result(p, timeout=30):
+    """After the digits: wait until X leaves the passcode screen, or says the passcode is wrong.
+    Never type again on our own: X destroys the chat keys after too many wrong passcodes."""
+    import time
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if "/i/chat/pin" not in p.url:
+            return True
+        try:
+            txt = p.locator('[data-testid="xchatEmbedRoute"]').first.inner_text(timeout=1000)
+        except Exception:
+            txt = ""
+        if any(w in txt for w in WRONG_PIN):
+            return False
+        p.wait_for_timeout(500)
+    return None
 
 
 def _open(self, p, url=CHAT):
-    """Open a chat page, getting through the passcode screens if X shows them."""
+    """Open a chat page, getting through the passcode screen if X shows it. Waits until either the
+    passcode screen or the chat itself is on screen before deciding (X redirects a moment after load)."""
+    import time
     self.goto(p, url)
-    for _ in range(3):
-        p.wait_for_timeout(2500)
-        if "/i/chat/pin" not in p.url:
-            break
-        pin = _pin(self.handle)
-        if not pin:
-            raise UsageError(f"chat wants a passcode for @{self.handle} (anyx --as {self.handle} chat setup --pin NNNN)")
-        if p.locator('[data-testid="pin-onboarding-setup-now"]').count():
+    pin_box = p.locator('[data-testid="pin-code-input-container"]')
+    setup = p.locator('[data-testid="pin-onboarding-setup-now"]')
+    ready = p.locator('[data-testid="dm-inbox-panel"], [data-testid="dm-conversation-panel"], [data-testid="dm-settings-root"]')
+    tried = 0
+    end = time.monotonic() + 45
+    while time.monotonic() < end:
+        if setup.count() and setup.first.is_visible():
             raise UsageError(f"chat is not set up for @{self.handle} yet (anyx --as {self.handle} chat setup --pin NNNN)")
-        _type_pin(p, pin)
-        p.wait_for_timeout(2500)
-        if "/i/chat/pin" in p.url and url != CHAT:
-            self.goto(p, url)
-    if "/i/chat/pin" in p.url:
-        raise ActionFailed("chat did not accept the passcode")
-    p.locator('[data-testid="dm-container"]').first.wait_for(state="attached", timeout=30000)
-    return p
+        if pin_box.count() and pin_box.first.is_visible():
+            pin = _pin(self.handle)
+            if not pin:
+                raise UsageError(f"chat wants the passcode for @{self.handle} (anyx --as {self.handle} chat setup --pin NNNN)")
+            if tried:
+                raise ActionFailed("chat is still asking for the passcode; anyx does not try again on its own")
+            _type_pin(p, pin)
+            tried += 1
+            ok = _await_pin_result(p)
+            if ok is False:
+                raise ActionFailed("X says the stored chat passcode is wrong; anyx did not try again "
+                                   f"(anyx --as {self.handle} chat setup --pin NNNN to store the right one)")
+            if ok is None:
+                raise ActionFailed("X did not answer the passcode in 30 s; anyx did not try again")
+            if url != CHAT and not p.url.startswith(url):
+                self.goto(p, url)
+            continue
+        if ready.count() and ready.first.is_visible() and "/i/chat/pin" not in p.url:
+            # right after the passcode X is still restoring the keys and the conversations
+            p.wait_for_timeout(4000 if tried else 800)
+            return p
+        p.wait_for_timeout(400)
+    raise UIChanged(f"chat did not open ({p.url})")
 
 
 def chat_setup(self, pin):
@@ -77,12 +121,12 @@ def chat_setup(self, pin):
         if p.locator('[data-testid="pin-onboarding-setup-now"]').count():
             p.locator('[data-testid="pin-onboarding-setup-now"]').click()
             _type_pin(p, pin)              # choose
+            p.wait_for_timeout(1500)
             _type_pin(p, pin)              # confirm
         else:
             _type_pin(p, pin)              # recover on this browser
-        p.wait_for_timeout(3000)
-        if "/i/chat/pin" in p.url:
-            raise ActionFailed("X did not accept the passcode")
+        if _await_pin_result(p) is not True:
+            raise ActionFailed("X did not accept the passcode; anyx did not try again")
         _save_pin(self.handle, pin)
         return {"user": self.handle, "result": "done"}
     finally:
@@ -102,6 +146,11 @@ def chats(self, limit=30, box="all"):
             p.locator(f'[data-testid="dm-inbox-dropdown-{ids[box]}"]').first.click()
             p.wait_for_timeout(2500)
         rows = p.locator('[data-testid^="dm-conversation-item-"]')
+        empty = p.locator('[data-testid="dm-empty-inbox"]')
+        for _ in range(40):                      # the list loads after the chat opens
+            if rows.count() or empty.count():
+                break
+            p.wait_for_timeout(250)
         out = []
         for r in rows.all()[:limit]:
             tid = r.get_attribute("data-testid")
@@ -150,8 +199,12 @@ def messages(self, ref, limit=50):
     p = self.page()
     try:
         _open(self, p, url)
-        p.wait_for_timeout(2500)
-        if not p.locator('[data-testid="dm-message-list"]').count():
+        lst = p.locator('[data-testid="dm-message-list"]')
+        for _ in range(40):
+            if lst.count() and p.locator("[data-dm-message-row]").count():
+                break
+            p.wait_for_timeout(250)
+        if not lst.count():
             raise NotFound(f"no conversation at {url}")
         seen = -1
         for _ in range(15):
@@ -178,7 +231,7 @@ def dm(self, to, text=None, media=None):
         _open(self, p, url)
         box = p.locator('[data-testid="dm-composer-textarea"]').first
         try:
-            box.wait_for(state="visible", timeout=15000)
+            box.wait_for(state="visible", timeout=30000)
         except Exception:
             if p.get_by_text("受信トレイは閉じられて").count() or p.get_by_text("inbox is closed", exact=False).count():
                 raise ActionFailed(f"@{to}'s inbox is closed to this account (they need to follow it, or open DMs)")
