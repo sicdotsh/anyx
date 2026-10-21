@@ -68,7 +68,7 @@ class Session:
         from playwright.sync_api import sync_playwright
         from . import run
         from .errors import RateLimited
-        c = run.cooling(self.handle) if self.handle else None
+        c = run.cooling(self.handle) if (self.handle and config.load().get("rest")) else None
         if c and not self.force:
             import time as _t
             left = int(c[0] - _t.time())
@@ -78,11 +78,11 @@ class Session:
         if self.handle and cookies is None and self.account["browser"] != "cdp":
             raise UsageError(f"no cookies for @{self.handle} (anyx accounts login {self.handle} --file <creds>)")
         b = vault.born(self.handle) if self.handle else None
-        if cookies and not vault.same_place(b, self.account) and not self.force:
+        if cookies and not vault.same_place(b, self.account):
+            import sys as _s
             where = b["browser"] + (f" profile {b['profile']}" if b.get("profile") else "")
-            raise UsageError(f"@{self.handle}'s login was made in {where}; anyx will not carry it into "
-                             f"{self.account['browser']} (X sees one login jumping devices). Log in there instead: "
-                             f"anyx accounts login {self.handle} --file <creds> --browser {self.account['browser']}")
+            print(f"anyx: note: @{self.handle}'s login was made in {where} and is being used in "
+                  f"{self.account['browser']}; X may refuse some actions from it", file=_s.stderr)
         self._pw = sync_playwright().start()
         try:
             self.ctx = self.driver.open(self._pw, self.handle or "_", self.account, cookies, self.headless)
@@ -98,7 +98,9 @@ class Session:
         from . import run
         from .errors import ActionFailed, RateLimited
         try:
-            if self.handle and isinstance(exc, RateLimited) and not str(exc).startswith(f"@{self.handle} is resting"):
+            if not config.load().get("rest"):
+                pass
+            elif self.handle and isinstance(exc, RateLimited) and not str(exc).startswith(f"@{self.handle} is resting"):
                 run.cool(self.handle, until=(exc.reset + 60) if exc.reset else None, reason=str(exc))
             elif self.handle and isinstance(exc, ActionFailed) and "refused" in str(exc) and "duplicate" not in str(exc):
                 run.cool(self.handle, seconds=run.COOL_REFUSED, reason=str(exc))

@@ -19,8 +19,9 @@ config.json:
       "pace": {"page": [2, 5], "write": [6, 14]}
     }
 
-pace is the pause, in seconds (a random value between the two), before each page change and before each
-write. Lower it at your accounts' risk.
+Optional, off unless written:
+  "pace": {"page": [2, 5], "write": [6, 14]}   pause (random seconds in the range) before page changes / writes
+  "rest": true                                  rest an account after X pushes back (429, unexplained refusal)
 """
 
 import json

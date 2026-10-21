@@ -67,10 +67,9 @@ accounts
   whoami
 
 <post> is a URL or an id; <handle> is a handle, @handle or profile URL.
-anyx acts like one person with one tab: each account's browser stays open between commands, pages
-change inside X's app instead of reloading, there is a pause before every page change and a longer
-one before every write, and the first 429 or unexplained refusal puts the account to rest (no retries;
---force overrides). --as picks the account (default: the only one, or ANYX_ACCOUNT); a,b,c or all runs the command as each,
+Each account's browser stays open between commands and pages change inside X's app instead of
+reloading. Pausing ("pace") and resting accounts after X pushes back ("rest") are off unless
+~/.anyx/config.json turns them on. --as picks the account (default: the only one, or ANYX_ACCOUNT); a,b,c or all runs the command as each,
 N at a time (-j, default 4). --json prints JSON. --show opens a visible window. --wait sleeps through
 rate limits until X says they lift, then carries on. Exit codes: 0 ok, 2 usage, 3 logged out, 4 wrong account, 5 X changed its page,
 6 rate limited, 7 not found, 8 X did not confirm.
@@ -365,13 +364,7 @@ def run(argv):
                 if not creds:
                     raise UsageError(f"{rest[0]} is not in {a.file}")
             out = []
-            import random as _r
-            import time as _t
-            for i, (h, pw, sec) in enumerate(creds):
-                if i:
-                    gap = _r.uniform(60, 180)          # many logins in a row from one address stand out
-                    print(f"anyx: next login in {int(gap)}s", file=sys.stderr, flush=True)
-                    _t.sleep(gap)
+            for h, pw, sec in creds:
                 try:
                     out.append(login.login(h, pw, sec, browser=a.browser or "chromium", headless=not g["show"]))
                 except AnyxError as e:

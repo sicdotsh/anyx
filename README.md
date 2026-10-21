@@ -59,16 +59,21 @@ X only delivers messages between accounts that follow each other, or to accounts
 
 ## How it behaves
 
-anyx acts like one person with one tab, because that is what keeps accounts healthy:
-
 - Each account's browser stays open between commands (`anyx status`, `anyx stop`). The first command starts it; later ones reuse the same tab.
 - Pages change inside X's app, the way clicking a link does, instead of reloading it. A reload boots X's whole app (about 30 requests); a change inside it costs 6 to 12.
-- There is a pause of a few seconds before every page change, and a longer one before every write (2-5 s and 6-14 s; change them with `"pace": {"page": [2, 5], "write": [6, 14]}` in `~/.anyx/config.json`).
-- The first sign of X pushing back (a 429, or a refusal X does not explain) puts the account to rest: anyx refuses to act as it until the time X gave, or for a while, and never retries on its own. `--force` overrides; don't.
+- A rate limit is reported with the time X says it lifts (exit code 6); `--wait` sleeps until then and carries on.
+
+How hard to drive an account is yours to decide. Two switches in `~/.anyx/config.json`, both off by default:
+
+```json
+{"pace": {"page": [2, 5], "write": [6, 14]}, "rest": true}
+```
+
+`pace` pauses a random number of seconds before each page change and before each write. `rest` puts an account to rest after X pushes back (a 429 until X's reset time, an unexplained refusal for an hour, a login wall for a day); anyx then refuses to act as it until then.
 
 ## Accounts
 
-A login belongs to the browser it happened in. anyx logs each account in itself, in that account's own browser, and keeps the cookies in `~/.anyx/accounts/<handle>.json` together with where they were born. It never carries a login into another browser: to X that looks like one session jumping between devices, and X answers by quietly refusing things.
+anyx logs each account in itself, in that account's own browser, and keeps the cookies in `~/.anyx/accounts/<handle>.json` together with the browser they were made in. Using them in another browser works, with a note: to X it looks like one login moving between devices, and X sometimes refuses things from it.
 
 ```
 anyx accounts login - --file creds.tsv          # log every account in, in its own Chromium
@@ -80,7 +85,7 @@ anyx accounts check all                         # ok, expired, locked, suspended
 anyx accounts list
 ```
 
-`creds.tsv` has one account per line: `handle<TAB>password<TAB>totp-secret`, the last column only for accounts with two-factor on. anyx spaces logins out; X asks new devices for an email code now and then, and an account that stops there needs `accounts add` once.
+`creds.tsv` has one account per line: `handle<TAB>password<TAB>totp-secret`, the last column only for accounts with two-factor on. X asks new devices for an email code now and then; an account that stops there needs `accounts add` once.
 
 Before anything is done, anyx checks that the browser really is the account asked for. If it is not, it stops without touching anything.
 
@@ -127,7 +132,7 @@ anyx exits with a code that says what happened, so scripts can react:
 | 3 | the account is logged out or locked (`anyx accounts add <handle>` again) |
 | 4 | the browser showed a different account; nothing was touched |
 | 5 | something anyx relies on was not on the page: X changed its layout |
-| 6 | rate limited by X, or the account is resting after one (`anyx status` says until when) |
+| 6 | rate limited by X (or resting after one, when `rest` is on) |
 | 7 | the post or account does not exist or is not visible |
 | 8 | X did not confirm the change, or refused it (its own reason is printed, e.g. a duplicate post) |
 

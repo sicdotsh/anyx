@@ -5,10 +5,9 @@
     cool_until   epoch second before which anyx refuses to act as this account
     cool_reason  why (a rate limit, a refusal X did not explain)
 
-anyx behaves like one person with one tab: the browser stays open between commands, pages change
-inside X's app instead of reloading it, there is a pause before each change, and the first sign of
-X pushing back (a 429, a refusal without a reason) stops all use of the account for a while instead
-of trying again.
+The browser stays open between commands and pages change inside X's app instead of reloading it.
+Pausing between actions ("pace") and resting an account after X pushes back ("rest") are off unless
+config.json turns them on: how hard to drive an account is the user's call.
 """
 
 import json
@@ -19,8 +18,8 @@ import time
 from . import config
 
 RUN = os.path.join(config.HOME, "run")
-GAP = (2.0, 5.0)           # seconds between page changes
-WRITE_GAP = (6.0, 14.0)    # seconds before a write (like, follow, post, ...)
+GAP = (0, 0)               # seconds between page changes, unless config.json says "pace"
+WRITE_GAP = (0, 0)         # seconds before a write
 COOL_LIMIT = 20 * 60       # a 429 without a reset time
 COOL_REFUSED = 60 * 60     # X refused something without a clear reason
 
@@ -59,9 +58,11 @@ def forget(handle, *keys):
 
 def pace(handle, write=False):
     """Sleep so that page changes for one account are spaced like a person's.
-    The gaps can be changed in ~/.anyx/config.json: {"pace": {"page": [2, 5], "write": [6, 14]}}."""
+    Off unless ~/.anyx/config.json has e.g. {"pace": {"page": [2, 5], "write": [6, 14]}}."""
     p = (config.load().get("pace") or {})
     lo, hi = (p.get("write") or WRITE_GAP) if write else (p.get("page") or GAP)
+    if not hi:
+        return
     last = load(handle).get("last") or 0
     wait = last + random.uniform(lo, hi) - time.time()
     if wait > 0:
