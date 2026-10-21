@@ -15,8 +15,12 @@ config.json:
         "bob":   {"browser": "adspower", "profile": "x-bob"},
         "carol": {"browser": "cdp", "cdp": "http://127.0.0.1:9222"}
       },
-      "adspower": {"api": "http://local.adspower.net:50325", "key_env": "ADSPOWER_API_KEY"}
+      "adspower": {"api": "http://local.adspower.net:50325", "key_env": "ADSPOWER_API_KEY"},
+      "pace": {"page": [2, 5], "write": [6, 14]}
     }
+
+pace is the pause, in seconds (a random value between the two), before each page change and before each
+write. Lower it at your accounts' risk.
 """
 
 import json

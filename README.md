@@ -63,7 +63,7 @@ anyx acts like one person with one tab, because that is what keeps accounts heal
 
 - Each account's browser stays open between commands (`anyx status`, `anyx stop`). The first command starts it; later ones reuse the same tab.
 - Pages change inside X's app, the way clicking a link does, instead of reloading it. A reload boots X's whole app (about 30 requests); a change inside it costs 6 to 12.
-- There is a pause of a few seconds before every page change, and a longer one before every write.
+- There is a pause of a few seconds before every page change, and a longer one before every write (2-5 s and 6-14 s; change them with `"pace": {"page": [2, 5], "write": [6, 14]}` in `~/.anyx/config.json`).
 - The first sign of X pushing back (a 429, or a refusal X does not explain) puts the account to rest: anyx refuses to act as it until the time X gave, or for a while, and never retries on its own. `--force` overrides; don't.
 
 ## Accounts

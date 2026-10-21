@@ -58,8 +58,10 @@ def forget(handle, *keys):
 
 
 def pace(handle, write=False):
-    """Sleep so that page changes for one account are spaced like a person's."""
-    lo, hi = WRITE_GAP if write else GAP
+    """Sleep so that page changes for one account are spaced like a person's.
+    The gaps can be changed in ~/.anyx/config.json: {"pace": {"page": [2, 5], "write": [6, 14]}}."""
+    p = (config.load().get("pace") or {})
+    lo, hi = (p.get("write") or WRITE_GAP) if write else (p.get("page") or GAP)
     last = load(handle).get("last") or 0
     wait = last + random.uniform(lo, hi) - time.time()
     if wait > 0:
