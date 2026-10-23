@@ -16,6 +16,55 @@ from . import browsers, config, vault
 from .errors import NotFound, SessionExpired, UIChanged, UsageError, WrongAccount
 
 
+SHOWN_JS = """() => {
+    const b = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
+    const at = b && [...b.querySelectorAll('span')].map(s => s.textContent.trim()).find(t => /^@\\w+$/.test(t));
+    if (at) return at.slice(1);
+    const l = document.querySelector('[data-testid="AppTabBar_Profile_Link"]');   // the older side bar
+    return l ? (l.getAttribute('href') || '').replace(/\\//g, '') : null;
+}"""
+
+
+def shown_handle(page):
+    """The handle X's side bar shows as logged in, or None while it is not drawn."""
+    try:
+        return (page.evaluate(SHOWN_JS) or "").lower() or None
+    except Exception:
+        return None
+
+
+BOOTED_JS = """() => {
+    window.__anyx = 1;
+    window.name = 'anyx';
+    // X's floating chat button sits over the bottom right of every page and takes clicks meant for
+    // what is under it (the Save of the muted-word form): hide it in anyx's tab
+    if (!document.getElementById('anyx-style')) {
+        const s = document.createElement('style');
+        s.id = 'anyx-style';
+        s.textContent = '[data-testid^="chat-drawer"] { display: none !important; }';
+        document.head.appendChild(s);
+    }
+}"""
+
+
+def booted(page):
+    """Mark a page that has just loaded X's app for real as anyx's own."""
+    try:
+        page.evaluate(BOOTED_JS)
+    except Exception:
+        pass
+
+
+def _dismiss(dialog):
+    try:
+        if dialog.type == "beforeunload":
+            dialog.accept()                 # "leave this page?": yes, anyx is moving on
+        else:
+            dialog.dismiss()
+    except Exception:
+        pass
+
+
 def tweet_id(ref):
     """A post URL (…/status/<id>, …/statuses/<id>) or a bare id."""
     s = str(ref).strip()
@@ -95,6 +144,9 @@ class Session:
         try:
             self.ctx = self.driver.open(self._pw, self.handle or "_", self.account, cookies, self.headless)
             self.ctx.set_default_timeout(45000)
+            # answer page dialogs (leave-page prompts) ourselves: left to Playwright, a dialog the
+            # browser has already closed brings its driver down
+            self.ctx.on("dialog", _dismiss)
             if getattr(self.driver, "fresh", False):
                 self._forget_previous_account()
             if self.verify:
@@ -150,11 +202,42 @@ class Session:
                 except Exception:
                     pass
             if pg is None:
-                pg = self.ctx.pages[0] if getattr(self.driver, "started", False) and self.ctx.pages else self.ctx.new_page()
+                first = self.ctx.pages[0] if getattr(self.driver, "started", False) and self.ctx.pages else None
+                # a browser anyx has just started lends its first tab while it is still blank (AdsPower
+                # loads its own start page into it a moment later)
+                pg = first if first is not None and first.url in ("about:blank", "") else self.ctx.new_page()
                 pg.evaluate(f"window.name = '{MARK}'")
-            pg.set_viewport_size({"width": 1280, "height": 1000})
+            self._fit(pg)
             self._tab = Tab(pg)
         return self._tab
+
+    def _fit(self, pg):
+        """Size the tab. A browser anyx launches itself opens at 1280x1000, so the tab is set to that. A
+        browser with a person's window (AdsPower, cdp) is drawn at whatever size that window has: a
+        viewport set larger than the window puts the bottom of the page (the composer's Post button)
+        outside it, where a click lands nowhere and anyx waits forever. So there the tab follows the
+        window, and only the width is ensured (under ~1280 px X folds its side bar away)."""
+        if self.account["browser"] not in ("adspower", "cdp"):
+            pg.set_viewport_size({"width": 1280, "height": 1000})
+            return
+        try:
+            cdp = self.ctx.new_cdp_session(pg)
+            try:
+                # an override left by an earlier connection outlives it, and clearing only clears this
+                # session's own: set one here first, then clearing drops both
+                cdp.send("Emulation.setDeviceMetricsOverride", {"width": 0, "height": 0, "deviceScaleFactor": 0, "mobile": False})
+                cdp.send("Emulation.clearDeviceMetricsOverride")
+                w = cdp.send("Browser.getWindowForTarget")
+                b = w.get("bounds") or {}
+                if b.get("windowState") == "minimized":
+                    cdp.send("Browser.setWindowBounds", {"windowId": w["windowId"], "bounds": {"windowState": "normal"}})
+                    b = cdp.send("Browser.getWindowBounds", {"windowId": w["windowId"]}).get("bounds") or {}
+                if b.get("windowState", "normal") == "normal" and (b.get("width") or 0) < 1300:
+                    cdp.send("Browser.setWindowBounds", {"windowId": w["windowId"], "bounds": {"width": 1300}})
+            finally:
+                cdp.detach()
+        except Exception:
+            pass
 
     def scratch(self):
         """A separate throwaway page, for things that are not X (rendering an image, ...)."""
@@ -171,26 +254,24 @@ class Session:
         from . import run
         if self.handle:
             run.pace(self.handle)
-        booted = False
+        running = False
         try:
-            booted = page.url.startswith("https://x.com/") and page.evaluate("window.__anyx === 1")
+            running = page.url.startswith("https://x.com/") and page.evaluate("window.__anyx === 1")
             # a sheet or modal left open by an earlier step would sit over the next page: load for real
-            if booted and page.locator('#layers [data-testid="mask"]').count():
-                booted = False
+            if running and page.locator('#layers [data-testid="mask"]').count():
+                running = False
         except Exception:
-            booted = False
-        if booted and url.startswith("https://x.com/") and "/i/flow/" not in url:
+            running = False
+        if running and url.startswith("https://x.com/") and "/i/flow/" not in url:
             path = url[len("https://x.com"):]
             page.evaluate("p => { history.pushState({}, '', p); dispatchEvent(new PopStateEvent('popstate', {state: {}})); }", path)
             page.wait_for_timeout(400)
+            booted(page)
             if isinstance(page, Tab):
                 page.spa_url = url
         else:
             page.goto(url, wait_until="domcontentloaded")
-            try:
-                page.evaluate("window.__anyx = 1; window.name = 'anyx'")
-            except Exception:
-                pass
+            booted(page)
             if isinstance(page, Tab):
                 page.spa_url = None
         if "/login" in page.url or "/i/flow/login" in page.url:
@@ -203,10 +284,7 @@ class Session:
         """Load the current address for real (used when the app showed cached data and fetched nothing)."""
         url = getattr(page, "spa_url", None) or page.url
         page.goto(url, wait_until="domcontentloaded")
-        try:
-            page.evaluate("window.__anyx = 1; window.name = 'anyx'")
-        except Exception:
-            pass
+        booted(page)
         if isinstance(page, Tab):
             page.spa_url = None
 
@@ -232,24 +310,22 @@ class Session:
         cap = graphql.Capture(p)
         try:
             self.goto(p, "https://x.com/home")
-            # X answers with its Viewer query on a fresh load, and only draws the profile link when it
-            # serves the app from cache: take whichever comes first
-            link = p.locator('[data-testid="AppTabBar_Profile_Link"]')
+            # X answers with its Viewer query on a fresh load, and only draws the side bar's account
+            # button when it serves the app from cache: take whichever comes first
             end = time.monotonic() + 30
             while time.monotonic() < end:
                 _, us = graphql.walk(cap.of("Viewer", "ViewerAccountSync"))
                 if us and us[0].get("handle"):
                     return us[0]["handle"]
-                if link.count():
-                    break
+                shown = shown_handle(p)
+                if shown:
+                    return shown
                 if "/login" in p.url or "/i/flow/login" in p.url:
                     raise SessionExpired("logged out")
                 if cap.limited:
                     raise cap.limit_error(cap.limited[0])
                 p.wait_for_timeout(250)
-            else:
-                raise UIChanged("could not find who is logged in on the home page")
-            return (link.get_attribute("href") or "").strip("/")
+            raise UIChanged("could not find who is logged in on the home page")
         finally:
             cap.detach()
 

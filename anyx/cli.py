@@ -415,7 +415,7 @@ def run(argv):
                    **config.set_account(rest[0], browser=a.browser, profile=a.profile, cdp=a.cdp, proxy=a.proxy)}
         elif act == "check" and rest:
             hs = vault.handles() if rest[0] == "all" else rest
-            out = [accounts.check(h) for h in hs]
+            out = [accounts.check(h, force=g["force"]) for h in hs]
             out = out[0] if len(out) == 1 else out
         elif act == "login" and a.file:
             from . import login

@@ -7,7 +7,8 @@ import urllib.parse
 from . import graphql
 from .errors import NotFound, UsageError
 
-TIMELINE_OPS = ("UserTweets", "UserOriginalsTimeline", "UserTweetsAndReplies", "UserMedia", "UserHighlightsTweets")
+TIMELINE_OPS = ("UserTweets", "UserOriginalsTimeline", "UserTweetsAndReplies", "UserRepliesTimeline", "UserMedia",
+                "UserVideoTimeline", "UserMediaTimeline", "UserHighlightsTweets")
 
 
 def _collect(self, url, ops, limit=40, pick=None, scrolls=40, first_wait=30):
@@ -16,13 +17,26 @@ def _collect(self, url, ops, limit=40, pick=None, scrolls=40, first_wait=30):
     cap = graphql.Capture(p)
     try:
         self.goto(p, url)
-        if cap.wait_for(ops, timeout=first_wait) is None:
+        pick = pick or (lambda tw, us: tw)
+
+        def loaded():
+            got = cap.of(*ops)
+            hit = [n for n in cap.limited if n in ops]
+            if not got and hit:
+                raise cap.limit_error(hit[0])
+            if not got:
+                return None
+            # on a page that was already open X only polls for newer items (cursors, no content): that is
+            # not the list. A real load's answer is, even when empty.
+            if pick(*graphql.walk(got)) or getattr(p, "spa_url", None) is None:
+                return True
+            return None
+
+        if cap._wait(loaded, first_wait) is None:
             if "Viewer" in cap.limited:
-                from .errors import RateLimited
                 raise cap.limit_error("Viewer")
             raise NotFound(f"nothing loaded at {url} (no {', '.join(ops)})")
         p.wait_for_timeout(1200)
-        pick = pick or (lambda tw, us: tw)
         stale = 0
         last = -1
         for _ in range(scrolls):

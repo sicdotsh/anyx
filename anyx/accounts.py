@@ -26,11 +26,10 @@ def add(handle, timeout=600):
             end = time.monotonic() + timeout
             who = None
             while time.monotonic() < end:
-                link = p.locator('[data-testid="AppTabBar_Profile_Link"]')
-                if link.count():
-                    who = (link.get_attribute("href") or "").strip("/").lower()
-                    if who:
-                        break
+                from .session import shown_handle
+                who = shown_handle(p)
+                if who:
+                    break
                 p.wait_for_timeout(1500)
             if not who:
                 raise AnyxError("gave up waiting for the login")
@@ -66,65 +65,61 @@ def import_file(handle, path, browser=None, profile=None):
     return {"user": handle.lstrip("@").lower(), "result": "saved"}
 
 
+# X's web app sends this public token with every API call; the account comes from the cookies
+WEB_BEARER = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+
+MULTI_JS = """async bearer => {
+    const ct0 = (document.cookie.match(/(?:^|; )ct0=([^;]+)/) || [])[1];
+    const r = await fetch('/i/api/1.1/account/multi/list.json', {credentials: 'include', headers: {
+        authorization: 'Bearer ' + bearer, 'x-csrf-token': ct0 || '', 'x-twitter-auth-type': 'OAuth2Session',
+        'x-twitter-active-user': 'yes'}});
+    return r.ok ? (await r.json()).users || [] : [];
+}"""
+
+
 def harvest(browser, profile=None, cdp=None, set_browser=True):
-    """Store every account logged into one browser. With AdsPower each account is opened once to learn
-    its handle, then the browser gets back exactly the cookies it had (every account still logged in)."""
+    """Store every account logged into one browser. The handles come from X's own account-switcher list
+    (one request, as the account in use): no account is switched, and the browser is left untouched."""
     from playwright.sync_api import sync_playwright
-    acct = {"browser": browser, "profile": profile, "cdp": cdp, "_adspower": config.load().get("adspower", {}),
-            "_force": True}
+    acct = {"browser": browser, "profile": profile, "cdp": cdp, "_adspower": config.load().get("adspower", {})}
     drv = browsers.get(browser)
-    out = {}
     with sync_playwright() as pw:
         ctx = drv.open(pw, "_harvest", acct, None, headless=True)
-        jar = drv.cookies()
-        drv.close()
-        sets = vault.split(jar)
-        if not sets:
-            raise AnyxError("no logged-in X account in that browser")
-        active = vault.user_id(vault.normalize(jar))
-        for uid, cookies in sets.items():
-            drv = browsers.get(browser)
-            ctx = drv.open(pw, "_harvest", acct, cookies, headless=True)
-            p = ctx.new_page()                  # a tab of its own; the browser's tabs are left alone
-            try:
-                p.set_viewport_size({"width": 1280, "height": 1000})   # narrower windows fold the side bar away
-                p.goto("https://x.com/home", wait_until="domcontentloaded")
-                link = p.locator('[data-testid="AppTabBar_Profile_Link"]')
-                try:
-                    link.wait_for(state="attached", timeout=40000)
-                    who = (link.get_attribute("href") or "").strip("/").lower()
-                except Exception:
-                    who = None
-            finally:
-                p.close()
-                drv.close()
-            if not who:
-                out[uid] = None
-                continue
+        p = ctx.new_page()                      # a tab of its own; the browser's tabs are left alone
+        try:
+            jar = drv.cookies()
+            sets = vault.split(jar)
+            if not sets:
+                raise AnyxError("no logged-in X account in that browser")
+            p.goto("https://x.com/robots.txt", wait_until="domcontentloaded")    # any x.com page, for the cookies
+            users = {str(u.get("user_id")): u for u in p.evaluate(MULTI_JS, WEB_BEARER)}
+        finally:
+            p.close()
+            drv.close()
+            if getattr(drv, "started", False):
+                drv.stop("_harvest")            # a browser started only for this goes away again
+    out = []
+    for uid, cookies in sets.items():
+        u = users.get(uid) or {}
+        who = (u.get("screen_name") or "").lower() or None
+        if who and u.get("is_auth_valid") is not False:
             vault.save(who, cookies)
             vault.set_born(who, browser, profile)
             if set_browser:
                 config.set_account(who, browser=browser, profile=profile, cdp=cdp)
-            out[uid] = who
-        if browser == "adspower" and active in sets:
-            # give the profile back its own cookies: the account it showed, the others in auth_multi
-            drv = browsers.get(browser)
-            ctx = drv.open(pw, "_harvest", acct, None, headless=True)
-            try:
-                browsers.restore(ctx, jar)
-            finally:
-                drv.close()
-    return [{"user_id": u, "user": h} for u, h in out.items()]
+        out.append({"user_id": uid, "user": who, "result": "stored" if who and u.get("is_auth_valid") is not False
+                    else "logged out" if who else "unknown"})
+    return out
 
 
-def check(handle):
+def check(handle, force=False):
     """Is the account usable right now? Opens it once and reports what X shows:
     ok, expired (logged out), locked (X wants a check), suspended, rate_limited, wrong_account."""
     from .errors import NotFound, RateLimited, WrongAccount
     from .session import Session
     out = {"user": handle.lstrip("@").lower()}
     try:
-        with Session(handle, verify="full") as x:
+        with Session(handle, verify="full", force=force) as x:
             out["browser"] = x.account["browser"]
             try:
                 u = x.user(x.me)

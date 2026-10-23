@@ -247,11 +247,13 @@ def post(self, text, quote=None, reply=None, media=None, at=None, alt=None, poll
         n = len(cap.items)
         dlg.locator('[data-testid="tweetButton"]').click()
         if at:
-            body = cap.wait_for(("CreateScheduledTweet",), timeout=60, after=n)
-            if body is None:
-                raise ActionFailed("X did not confirm the schedule")
-            return {"id": graphql.created_id(body, "create_scheduled_tweet"),
-                    "at": at.astimezone().isoformat(timespec="minutes"), "result": "scheduled"}
+            body = cap.confirm(("CreateScheduledTweet",), "the schedule", after=n, timeout=60)
+            sid = graphql.created_id(body, "create_scheduled_tweet")
+            if not sid:
+                # X answers a refused schedule (a daily limit, ...) with errors next to an empty result
+                why = "; ".join(e.get("message", "") for e in body.get("errors") or []) or "no id came back"
+                raise ActionFailed(f"X did not schedule the post: {why}")
+            return {"id": sid, "at": at.astimezone().isoformat(timespec="minutes"), "result": "scheduled"}
         want = 1 + len(thread or [])
         refused = None
         ids = []

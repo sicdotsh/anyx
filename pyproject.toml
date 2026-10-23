@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anyx"
-version = "0.1.4"
+version = "0.1.5"
 description = "Use X (Twitter) from any browser, as any of your accounts, from the command line or Python. No API keys."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "sic" }]
 requires-python = ">=3.10"
-dependencies = ["playwright>=1.45"]
+dependencies = ["playwright>=1.45,<1.61"]    # 1.64.1 failed to attach to AdsPower's SunBrowser; 1.60 works
 keywords = ["x", "twitter", "playwright", "automation", "cli", "adspower"]
 classifiers = [
   "Programming Language :: Python :: 3",

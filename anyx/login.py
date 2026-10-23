@@ -71,7 +71,8 @@ def _fill(p, sel, value):
 
 
 def _home(p):
-    return p.url.rstrip("/").endswith("/home") or p.locator('[data-testid="AppTabBar_Profile_Link"]').count() > 0
+    from .session import shown_handle
+    return p.url.rstrip("/").endswith("/home") or shown_handle(p) is not None
 
 
 def _wrong(p):
@@ -99,7 +100,7 @@ def login(handle, password, secret=None, browser="chromium", headless=True, wait
             if not own:
                 # someone else's browser: the accounts logged in there stay, and its tabs are left alone
                 where = f"AdsPower profile {acct.get('profile')}" if acct["browser"] == "adspower" else f"the browser at {acct.get('cdp')}"
-                browsers.check_free(ctx, handle.lower(), acct, where, vault.user_id(vault.normalize(before)))
+                browsers.check_free(ctx, handle.lower(), acct, where)
             browsers.restore(ctx, [])                       # log out, for the login flow
             p = ctx.pages[0] if own and ctx.pages else ctx.new_page()
             p.set_viewport_size({"width": 1280, "height": 900})
@@ -145,8 +146,8 @@ def login(handle, password, secret=None, browser="chromium", headless=True, wait
                 p.wait_for_timeout(2500)
             if not _home(p):
                 raise AnyxError(f"@{handle}: did not reach home ({p.url})")
-            link = p.locator('[data-testid="AppTabBar_Profile_Link"]')
-            who = (link.first.get_attribute("href") or "").strip("/").lower() if link.count() else handle.lower()
+            from .session import shown_handle
+            who = shown_handle(p) or handle.lower()
             got = ctx.cookies("https://x.com")
             vault.save(who, got)
             vault.set_born(who, acct["browser"], acct.get("profile"))
@@ -155,8 +156,6 @@ def login(handle, password, secret=None, browser="chromium", headless=True, wait
                 # as X's "add an existing account": the new one active, the ones before beside it
                 browsers.restore(ctx, before)
                 browsers.put(ctx, vault.switched(before, vault.normalize(got)))
-                from . import run
-                run.save(browsers.key(where), user=vault.user_id(vault.normalize(got)))
             done = True
             return {"user": who, "result": "logged in"}
         finally:

@@ -27,6 +27,143 @@ ONLY = None          # the sections to run (None: all); setup always runs
 SECTION = ["setup"]
 
 
+# ---- what the test owes the account ----
+# Everything the test makes or changes is written down before it is made, and crossed out when it is put
+# back. Whatever is still owed at the end (a failed step, an interrupted or crashed run) is put back
+# then, or, if the browser itself went down, at the start of the next run: the list lives on disk.
+
+def _owed_path(me):
+    from anyx import config
+    return os.path.join(config.HOME, "run", f"live-owed-{me.lower()}.json")
+
+
+OWED = {"path": None, "items": []}
+
+
+def _save_owed():
+    import json
+    os.makedirs(os.path.dirname(OWED["path"]), exist_ok=True)
+    with open(OWED["path"], "w") as f:
+        json.dump(OWED["items"], f)
+
+
+def owe(kind, **what):
+    OWED["items"].append(dict(what, kind=kind))
+    _save_owed()
+
+
+def paid(kind, **what):
+    OWED["items"] = [o for o in OWED["items"]
+                     if not (o["kind"] == kind and all(o.get(k) == v for k, v in what.items()))]
+    _save_owed()
+
+
+def settle(x):
+    """Put back everything still owed, newest first. What cannot be put back stays on the list."""
+    for o in list(reversed(OWED["items"])):
+        k = o["kind"]
+        try:
+            if k == "post":
+                x.delete(o["id"])
+            elif k == "scheduled":
+                if any(s["id"] == o["id"] for s in x.scheduled()):
+                    x.delete_scheduled([o["id"]])
+            elif k == "draft":
+                if any(d["id"] == o["id"] for d in x.drafts()):
+                    x.delete_drafts([o["id"]])
+            elif k == "list":
+                x.list_delete(o["id"])
+            elif k == "muted":
+                if any(w["word"] == o["word"] for w in x.muted_words()):
+                    x.unmute_word(o["word"])
+            elif k == "setting":
+                x.set_setting(o["name"], o["value"])
+            elif k == "bio":
+                x.edit_profile(bio=o["value"])
+            elif k == "pin":
+                x.pin(o["id"])
+            elif k == "relation":
+                u = x.user(o["user"])
+                if u["i_block"]:
+                    x.unblock(o["user"])
+                if u["i_mute"]:
+                    x.unmute(o["user"])
+                if bool(u["i_follow"]) != o["follow"]:
+                    (x.follow if o["follow"] else x.unfollow)(o["user"])
+            OWED["items"].remove(o)
+            _save_owed()
+            print(f"put back  {k} {o.get('id') or o.get('word') or o.get('name') or o.get('user') or ''}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            if "not found" in str(e).lower() or "does not exist" in str(e).lower():
+                OWED["items"].remove(o)
+                _save_owed()
+            else:
+                print(f"could not put back {k} {o}: {e}", flush=True)
+
+
+def keep_books(x):
+    """Write down what x's writing methods make, and cross off what they undo."""
+    orig = {n: getattr(x, n) for n in ("post", "delete", "delete_scheduled", "delete_drafts", "list_create",
+                                        "list_delete", "mute_word", "unmute_word")}
+
+    def post(*a, **k):
+        o = orig["post"](*a, **k)
+        if o.get("result") == "scheduled":
+            owe("scheduled", id=o["id"])
+        elif o.get("result") == "saved":
+            owe("draft", id=o["id"])
+        else:
+            for i in o.get("ids") or [o.get("id")]:
+                owe("post", id=i)
+        return o
+
+    def delete(i):
+        o = orig["delete"](i)
+        paid("post", id=str(i))
+        return o
+
+    def delete_scheduled(refs):
+        o = orig["delete_scheduled"](refs)
+        for i in o.get("ids") or []:
+            paid("scheduled", id=i)
+        return o
+
+    def delete_drafts(refs):
+        o = orig["delete_drafts"](refs)
+        for i in o.get("ids") or []:
+            paid("draft", id=i)
+        return o
+
+    def list_create(*a, **k):
+        o = orig["list_create"](*a, **k)
+        owe("list", id=o["id"])
+        return o
+
+    def list_delete(ref):
+        o = orig["list_delete"](ref)
+        paid("list", id=o["list"])
+        return o
+
+    def mute_word(w):
+        owe("muted", word=w)
+        return orig["mute_word"](w)
+
+    def unmute_word(w):
+        o = orig["unmute_word"](w)
+        paid("muted", word=w)
+        return o
+
+    for name, fn in (("post", post), ("delete", delete), ("delete_scheduled", delete_scheduled),
+                     ("delete_drafts", delete_drafts), ("list_create", list_create), ("list_delete", list_delete),
+                     ("mute_word", mute_word), ("unmute_word", unmute_word)):
+        setattr(x, name, fn)
+
+
+def active():
+    """Is the current section being run (not skipped by --only)?"""
+    return not ONLY or SECTION[0] in ONLY
+
+
 def section(name):
     SECTION[0] = name
 
@@ -110,158 +247,22 @@ def main():
     tag = datetime.now().strftime("%m%d%H%M%S")
     tmp = tempfile.mkdtemp(prefix="anyx-live-")
 
+    import json
+    OWED["path"] = _owed_path(a.me)
+    try:
+        OWED["items"] = json.load(open(OWED["path"]))
+    except (OSError, ValueError):
+        OWED["items"] = []
+
     with anyx.Session(a.me, headless=not a.show) as x:
-        me = step("whoami", x.whoami, lambda h: h.lower() == a.me.lower())
-        mine = step("user (me)", lambda: x.user(a.me), lambda u: u["handle"].lower() == a.me.lower())
-        target = step("user (target)", lambda: x.user(a.target), lambda u: bool(u["id"]))
-        if not target:
-            return finish(tmp)
-        posts = step("posts (target)", lambda: x.timeline(a.target, limit=5), lambda l: len(l) > 0)
-        own = [t for t in posts or [] if not t.get("retweeted") and (t["author"]["handle"] or "").lower() == a.target.lower()]
-        if not own:
-            return finish(tmp)
-        P = own[0]["id"]
-
-        # reading
-        section("read")
-        step("tweet", lambda: x.tweet(P), lambda t: t["id"] == P and t["views"] is not None)
-        step("thread", lambda: x.thread(P, limit=5), lambda l: l and l[0]["id"] == P)
-        step("quotes", lambda: x.quotes(P, limit=5), lambda l: isinstance(l, list))
-        step("search latest", lambda: x.search(f"from:{a.target}", limit=5), lambda l: len(l) > 0)
-        step("search people", lambda: x.search(a.target, tab="people", limit=3), lambda l: len(l) > 0)
-        step("home", lambda: x.home(limit=5), lambda l: len(l) > 0)
-        step("home following", lambda: x.home(limit=5, following=True), lambda l: isinstance(l, list))
-        step("notifications", lambda: x.notifications(limit=5), lambda l: isinstance(l, list))
-        step("following (target)", lambda: x.following(a.target, limit=5), lambda l: isinstance(l, list))
-        step("followers (target)", lambda: x.followers(a.target, limit=5), lambda l: len(l) > 0)
-        step("shot", lambda: {"file": x.shot(P, os.path.join(tmp, "shot.png"))},
-             lambda o: os.path.getsize(o["file"]) > 1000)
-
-        # engaging with the target's post
-        section("engage")
-        done = lambda o: o["result"] in ("done", "already")
-        step("like", lambda: x.like(P), done)
-        step("like (again)", lambda: x.like(P), lambda o: o["result"] == "already")
-        step("likes (me)", lambda: x.likes(limit=5), lambda l: any(t["id"] == P for t in l))
-        step("unlike", lambda: x.unlike(P), done)
-        step("retweet", lambda: x.retweet(P), done)
-        step("unretweet", lambda: x.unretweet(P), done)
-        step("bookmark", lambda: x.bookmark(P), done)
-        step("bookmarks", lambda: x.bookmarks(limit=5), lambda l: any(t["id"] == P for t in l))
-        step("unbookmark", lambda: x.unbookmark(P), done)
-
-        # relationships, restored to how they were
-        section("people")
-        was_following = bool(target.get("i_follow"))
-        if was_following:
-            step("unfollow", lambda: x.unfollow(a.target), done)
-            step("follow", lambda: x.follow(a.target), done)
-        else:
-            step("follow", lambda: x.follow(a.target), done)
-            step("follow (again)", lambda: x.follow(a.target), lambda o: o["result"] == "already")
-            step("unfollow", lambda: x.unfollow(a.target), done)
-        step("mute", lambda: x.mute(a.target), done)
-        step("unmute", lambda: x.unmute(a.target), done)
-        step("block", lambda: x.block(a.target), done)
-        step("unblock", lambda: x.unblock(a.target), done)
-        if was_following:
-            step("follow (restore)", lambda: x.follow(a.target), done)
-        step("relationship restored", lambda: x.user(a.target),
-             lambda u: bool(u["i_follow"]) == was_following and not u["i_mute"] and not u["i_block"])
-
-        # posting, then cleaning up
-        section("post")
-        img = os.path.join(tmp, "card.png")
-        write_png(img, 800, 800, (17, 17, 17))
-
-        mine_pinned = (mine or {}).get("pinned")
-        p1 = step("post", lambda: x.post(f"anyx live test {tag}"), lambda o: bool(o.get("id")))
-        if p1:
-            step("pin", lambda: x.pin(p1["id"]), done)
-            step("unpin", lambda: x.unpin(p1["id"]), done)
-            if mine_pinned:
-                step("pin (restore old)", lambda: x.pin(mine_pinned), done)
-        r1 = step("reply", lambda: x.post(f"anyx live test reply {tag}", reply=P), lambda o: bool(o.get("id")))
-        q1 = step("quote", lambda: x.post(f"anyx live test quote {tag}", quote=P), lambda o: bool(o.get("id")))
-        if q1:
-            step("quote is listed", lambda: x.quotes(P, limit=40),
-                 lambda l: any(t["id"] == q1["id"] for t in l), soft=True)
-        m1 = step("post with image", lambda: x.post(f"anyx live test image {tag}", media=[img]),
-                  lambda o: bool(o.get("id")))
-        if m1:
-            step("image is attached", lambda: x.tweet(m1["id"]), lambda t: len(t["media"]) == 1)
-        v1 = None
-        vid = write_mp4(os.path.join(tmp, "clip.mp4"))
-        if vid:
-            v1 = step("post with video", lambda: x.post(f"anyx live test video {tag}", media=[vid]),
-                      lambda o: bool(o.get("id")))
-            if v1:
-                step("video is attached", lambda: x.tweet(v1["id"]),
-                     lambda t: (t["media"] or [{}])[0].get("type") == "video")
-        at = (datetime.now() + timedelta(days=2)).replace(hour=3, minute=17, second=0, microsecond=0)
-        step("schedule", lambda: x.post(f"anyx live test scheduled {tag}", at=at), lambda o: o.get("result") == "scheduled")
-        step("scheduled", x.scheduled, lambda l: any(tag in s["text"] for s in l))
-        step("move scheduled", lambda: x.reschedule(f"scheduled {tag}", at + timedelta(days=1)),
-             lambda o: o["result"] == "moved")
-        step("delete scheduled", lambda: x.delete_scheduled([f"scheduled {tag}"]), lambda o: o["deleted"] == 1)
-        for name, o in (("delete post", p1), ("delete reply", r1), ("delete quote", q1), ("delete image post", m1),
-                        ("delete video post", v1)):
-            if o and o.get("id"):
-                step(name, lambda i=o["id"]: x.delete(i), lambda r: r["result"] == "deleted")
-
-        # more ways to post
-        section("more")
-        t1 = step("post poll", lambda: x.post("test", poll={"choices": ["a", "b"], "days": 1}), lambda o: bool(o.get("id")))
-        t2 = step("post alt", lambda: x.post("test " + tag, media=[img], alt=["test"]), lambda o: bool(o.get("id")))
-        if t2:
-            step("alt is set", lambda: x.tweet(t2["id"]), lambda t: (t["media"] or [{}])[0].get("alt") == "test")
-        t3 = step("post who=following", lambda: x.post("test  " + tag, who="following"), lambda o: bool(o.get("id")))
-        t4 = step("post thread", lambda: x.post("test   " + tag, thread=["test", "test"]), lambda o: len(o.get("ids", [])) == 3)
-        for o in (t1, t2, t3):
-            if o:
-                step("delete", lambda i=o["id"]: x.delete(i), lambda r: r["result"] == "deleted")
-        for i in (t4 or {}).get("ids", []):
-            step("delete thread post", lambda i=i: x.delete(i), lambda r: r["result"] == "deleted")
-        step("draft", lambda: x.post("test draft " + tag, draft=True), lambda o: o["result"] == "saved")
-        step("drafts", x.drafts, lambda l: any(tag in d["text"] for d in l))
-        step("delete draft", lambda: x.delete_drafts([tag]), lambda o: o["deleted"] == 1)
-        mine_posts = step("posts (me)", lambda: x.timeline(a.me, limit=3), lambda l: isinstance(l, list))
-        if mine_posts:
-            seen = [t for t in mine_posts if (t.get("views") or 0) > 0]
-            if seen:
-                step("analytics", lambda: x.analytics(seen[0]["id"]), lambda d: "impressions" in d)
-
-        # notifications, trends, lists
-        section("lists")
-        step("notifications (all kinds)", lambda: x.notifications(limit=10), lambda l: isinstance(l, list))
-        step("trends", lambda: x.trends(limit=5), lambda l: len(l) > 0)
-        L = step("list create", lambda: x.list_create("test", "test"), lambda o: bool(o.get("id")))
-        if L:
-            step("list add", lambda: x.list_add(L["id"], a.target), done)
-            step("list members", lambda: x.list_members(L["id"]), lambda l: any((u["handle"] or "").lower() == a.target.lower() for u in l))
-            step("list posts", lambda: x.list_posts(L["id"], limit=3), lambda l: isinstance(l, list))
-            step("list remove", lambda: x.list_remove(L["id"], a.target), done)
-            step("list delete", lambda: x.list_delete(L["id"]), lambda o: o["result"] == "deleted")
-
-        # settings, each flipped and put back
-        section("settings")
-        before = step("settings", x.settings, lambda d: "protected" in d) or {}
-        for name, key in (("sensitive_media", "display_sensitive_media"), ("personalize_ads", "allow_ads_personalization")):
-            was = "on" if before.get(key) else "off"
-            flip = "off" if was == "on" else "on"
-            step(f"setting {name} {flip}", lambda n=name, f=flip: x.set_setting(n, f), done)
-            step(f"setting {name} {was}", lambda n=name, w=was: x.set_setting(n, w), done)
-        step("muted add", lambda: x.mute_word("test" + tag), done)
-        step("muted list", x.muted_words, lambda l: any(w["word"] == "test" + tag for w in l))
-        step("muted remove", lambda: x.unmute_word("test" + tag), done)
-
-        # profile, restored
-        section("profile")
-        if mine:
-            old_bio = mine.get("bio") or ""
-            step("profile bio", lambda: x.edit_profile(bio=(old_bio + f" ·{tag}")[:160]), done)
-            step("profile bio shows", lambda: x.user(a.me), lambda u: tag in (u.get("bio") or ""))
-            step("profile bio restore", lambda: x.edit_profile(bio=old_bio), done)
+        if OWED["items"]:
+            print(f"{len(OWED['items'])} thing(s) left over by an earlier run: putting them back", flush=True)
+            settle(x)
+        keep_books(x)
+        try:
+            run_steps(a, x, tag, tmp)
+        finally:
+            settle(x)               # whatever a failed, interrupted or crashed step left behind
 
     section("chat")
     if a.peer and (not ONLY or "chat" in ONLY):
@@ -273,6 +274,172 @@ def main():
             step("dm me -> peer", lambda: x.dm(a.peer, "test"), lambda o: o["result"] == "sent")
 
     return finish(tmp)
+
+
+def run_steps(a, x, tag, tmp):
+    me = step("whoami", x.whoami, lambda h: h.lower() == a.me.lower())
+    mine = step("user (me)", lambda: x.user(a.me), lambda u: u["handle"].lower() == a.me.lower())
+    target = step("user (target)", lambda: x.user(a.target), lambda u: bool(u["id"]))
+    if not target:
+        return
+    posts = step("posts (target)", lambda: x.timeline(a.target, limit=5), lambda l: len(l) > 0)
+    own = [t for t in posts or [] if not t.get("retweeted") and (t["author"]["handle"] or "").lower() == a.target.lower()]
+    if not own:
+        return
+    P = own[0]["id"]
+
+    # reading
+    section("read")
+    step("tweet", lambda: x.tweet(P), lambda t: t["id"] == P and t["views"] is not None)
+    step("thread", lambda: x.thread(P, limit=5), lambda l: l and l[0]["id"] == P)
+    step("quotes", lambda: x.quotes(P, limit=5), lambda l: isinstance(l, list))
+    step("search latest", lambda: x.search(f"from:{a.target}", limit=5), lambda l: len(l) > 0)
+    step("search people", lambda: x.search(a.target, tab="people", limit=3), lambda l: len(l) > 0)
+    step("home", lambda: x.home(limit=5), lambda l: len(l) > 0)
+    step("home following", lambda: x.home(limit=5, following=True), lambda l: isinstance(l, list))
+    step("notifications", lambda: x.notifications(limit=5), lambda l: isinstance(l, list))
+    step("following (target)", lambda: x.following(a.target, limit=5), lambda l: isinstance(l, list))
+    step("followers (target)", lambda: x.followers(a.target, limit=5), lambda l: len(l) > 0)
+    step("shot", lambda: {"file": x.shot(P, os.path.join(tmp, "shot.png"))},
+         lambda o: os.path.getsize(o["file"]) > 1000)
+
+    # engaging with the target's post
+    section("engage")
+    done = lambda o: o["result"] in ("done", "already")
+    step("like", lambda: x.like(P), done)
+    step("like (again)", lambda: x.like(P), lambda o: o["result"] == "already")
+    step("likes (me)", lambda: x.likes(limit=5), lambda l: any(t["id"] == P for t in l))
+    step("unlike", lambda: x.unlike(P), done)
+    step("retweet", lambda: x.retweet(P), done)
+    step("unretweet", lambda: x.unretweet(P), done)
+    step("bookmark", lambda: x.bookmark(P), done)
+    step("bookmarks", lambda: x.bookmarks(limit=5), lambda l: any(t["id"] == P for t in l))
+    step("unbookmark", lambda: x.unbookmark(P), done)
+
+    # relationships, restored to how they were
+    section("people")
+    was_following = bool(target.get("i_follow"))
+    if active():
+        owe("relation", user=a.target, follow=was_following)
+    if was_following:
+        step("unfollow", lambda: x.unfollow(a.target), done)
+        step("follow", lambda: x.follow(a.target), done)
+    else:
+        step("follow", lambda: x.follow(a.target), done)
+        step("follow (again)", lambda: x.follow(a.target), lambda o: o["result"] == "already")
+        step("unfollow", lambda: x.unfollow(a.target), done)
+    step("mute", lambda: x.mute(a.target), done)
+    step("unmute", lambda: x.unmute(a.target), done)
+    step("block", lambda: x.block(a.target), done)
+    step("unblock", lambda: x.unblock(a.target), done)
+    if was_following:
+        step("follow (restore)", lambda: x.follow(a.target), done)
+    if step("relationship restored", lambda: x.user(a.target),
+            lambda u: bool(u["i_follow"]) == was_following and not u["i_mute"] and not u["i_block"]):
+        paid("relation", user=a.target)
+
+    # posting, then cleaning up
+    section("post")
+    img = os.path.join(tmp, "card.png")
+    write_png(img, 800, 800, (17, 17, 17))
+
+    mine_pinned = (mine or {}).get("pinned")
+    if mine_pinned and (not ONLY or "post" in ONLY):
+        owe("pin", id=mine_pinned)
+    p1 = step("post", lambda: x.post(f"anyx live test {tag}"), lambda o: bool(o.get("id")))
+    if p1:
+        step("pin", lambda: x.pin(p1["id"]), done)
+        step("unpin", lambda: x.unpin(p1["id"]), done)
+        if mine_pinned:
+            if step("pin (restore old)", lambda: x.pin(mine_pinned), done):
+                paid("pin", id=mine_pinned)
+    r1 = step("reply", lambda: x.post(f"anyx live test reply {tag}", reply=P), lambda o: bool(o.get("id")))
+    q1 = step("quote", lambda: x.post(f"anyx live test quote {tag}", quote=P), lambda o: bool(o.get("id")))
+    if q1:
+        step("quote is listed", lambda: x.quotes(P, limit=40),
+             lambda l: any(t["id"] == q1["id"] for t in l), soft=True)
+    m1 = step("post with image", lambda: x.post(f"anyx live test image {tag}", media=[img]),
+              lambda o: bool(o.get("id")))
+    if m1:
+        step("image is attached", lambda: x.tweet(m1["id"]), lambda t: len(t["media"]) == 1)
+    v1 = None
+    vid = write_mp4(os.path.join(tmp, "clip.mp4"))
+    if vid:
+        v1 = step("post with video", lambda: x.post(f"anyx live test video {tag}", media=[vid]),
+                  lambda o: bool(o.get("id")))
+        if v1:
+            step("video is attached", lambda: x.tweet(v1["id"]),
+                 lambda t: (t["media"] or [{}])[0].get("type") == "video")
+    at = (datetime.now() + timedelta(days=2)).replace(hour=3, minute=17, second=0, microsecond=0)
+    step("schedule", lambda: x.post(f"anyx live test scheduled {tag}", at=at), lambda o: o.get("result") == "scheduled")
+    step("scheduled", x.scheduled, lambda l: any(tag in s["text"] for s in l))
+    step("move scheduled", lambda: x.reschedule(f"scheduled {tag}", at + timedelta(days=1)),
+         lambda o: o["result"] == "moved")
+    step("delete scheduled", lambda: x.delete_scheduled([f"scheduled {tag}"]), lambda o: o["deleted"] == 1)
+    for name, o in (("delete post", p1), ("delete reply", r1), ("delete quote", q1), ("delete image post", m1),
+                    ("delete video post", v1)):
+        if o and o.get("id"):
+            step(name, lambda i=o["id"]: x.delete(i), lambda r: r["result"] == "deleted")
+
+    # more ways to post
+    section("more")
+    t1 = step("post poll", lambda: x.post("test", poll={"choices": ["a", "b"], "days": 1}), lambda o: bool(o.get("id")))
+    t2 = step("post alt", lambda: x.post("test " + tag, media=[img], alt=["test"]), lambda o: bool(o.get("id")))
+    if t2:
+        step("alt is set", lambda: x.tweet(t2["id"]), lambda t: (t["media"] or [{}])[0].get("alt") == "test")
+    t3 = step("post who=following", lambda: x.post("test  " + tag, who="following"), lambda o: bool(o.get("id")))
+    t4 = step("post thread", lambda: x.post("test   " + tag, thread=["test", "test"]), lambda o: len(o.get("ids", [])) == 3)
+    for o in (t1, t2, t3):
+        if o:
+            step("delete", lambda i=o["id"]: x.delete(i), lambda r: r["result"] == "deleted")
+    for i in (t4 or {}).get("ids", []):
+        step("delete thread post", lambda i=i: x.delete(i), lambda r: r["result"] == "deleted")
+    step("draft", lambda: x.post("test draft " + tag, draft=True), lambda o: o["result"] == "saved")
+    step("drafts", x.drafts, lambda l: any(tag in d["text"] for d in l))
+    step("delete draft", lambda: x.delete_drafts([tag]), lambda o: o["deleted"] == 1)
+    mine_posts = step("posts (me)", lambda: x.timeline(a.me, limit=3), lambda l: isinstance(l, list))
+    if mine_posts:
+        seen = [t for t in mine_posts if (t.get("views") or 0) > 0]
+        if seen:
+            step("analytics", lambda: x.analytics(seen[0]["id"]), lambda d: "impressions" in d)
+
+    # notifications, trends, lists
+    section("lists")
+    step("notifications (all kinds)", lambda: x.notifications(limit=10), lambda l: isinstance(l, list))
+    step("trends", lambda: x.trends(limit=5), lambda l: len(l) > 0)
+    L = step("list create", lambda: x.list_create("test", "test"), lambda o: bool(o.get("id")))
+    if L:
+        step("list add", lambda: x.list_add(L["id"], a.target), done)
+        step("list members", lambda: x.list_members(L["id"]), lambda l: any((u["handle"] or "").lower() == a.target.lower() for u in l))
+        step("list posts", lambda: x.list_posts(L["id"], limit=3), lambda l: isinstance(l, list))
+        step("list remove", lambda: x.list_remove(L["id"], a.target), done)
+        step("list delete", lambda: x.list_delete(L["id"]), lambda o: o["result"] == "deleted")
+
+    # settings, each flipped and put back
+    section("settings")
+    before = step("settings", x.settings, lambda d: "protected" in d) or {}
+    for name, key in (("sensitive_media", "display_sensitive_media"), ("personalize_ads", "allow_ads_personalization")):
+        was = "on" if before.get(key) else "off"
+        if active() and before:
+            owe("setting", name=name, value=was)
+        flip = "off" if was == "on" else "on"
+        step(f"setting {name} {flip}", lambda n=name, f=flip: x.set_setting(n, f), done)
+        if step(f"setting {name} {was}", lambda n=name, w=was: x.set_setting(n, w), done):
+            paid("setting", name=name)
+    step("muted add", lambda: x.mute_word("test" + tag), done)
+    step("muted list", x.muted_words, lambda l: any(w["word"] == "test" + tag for w in l))
+    step("muted remove", lambda: x.unmute_word("test" + tag), done)
+
+    # profile, restored
+    section("profile")
+    if mine:
+        old_bio = mine.get("bio") or ""
+        if active():
+            owe("bio", value=old_bio)
+        step("profile bio", lambda: x.edit_profile(bio=(old_bio + f" ·{tag}")[:160]), done)
+        step("profile bio shows", lambda: x.user(a.me), lambda u: tag in (u.get("bio") or ""))
+        if step("profile bio restore", lambda: x.edit_profile(bio=old_bio), done):
+            paid("bio")
 
 
 def finish(tmp):

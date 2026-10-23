@@ -17,11 +17,13 @@ class Capture:
 
     def __init__(self, page):
         self.page = page
-        self.items = []          # (operation, json)
-        self.rest = []           # (path, json)
+        self._items = []         # (operation, json)
+        self._rest = []          # (path, json)
+        self._waiting = []       # responses seen but not read yet
         self.limited = []        # operations (or REST paths) X answered 429 for
         self.reset = None        # epoch second the limit lifts, from x-rate-limit-reset
         page.on("response", self._on)
+        page.on("requestfinished", self._done)
 
     @staticmethod
     def _ours(url):
@@ -29,31 +31,62 @@ class Capture:
         return "/i/api/" in url or url.startswith("https://api.x.com/")
 
     def _on(self, r):
-        url = r.url
-        if not self._ours(url):
-            return
-        if r.status == 429:
-            self.limited.append(self._name(url))
-            try:
-                self.reset = max(self.reset or 0, int(r.headers.get("x-rate-limit-reset") or 0)) or None
-            except (TypeError, ValueError):
-                pass
-            return
+        """Rate limits are seen on the response itself. Bodies are not read here: a call into Playwright
+        from inside its event handler gets cancelled when the page moves on or closes (seen as stray
+        CancelledError / TargetClosedError tracebacks). They are read in _read, from anyx's own flow, once
+        the request has finished (_done)."""
         try:
-            body = r.json()
+            url = r.url
+            if not self._ours(url):
+                return
+            if r.status == 429:
+                self.limited.append(self._name(url))
+                try:
+                    self.reset = max(self.reset or 0, int(r.headers.get("x-rate-limit-reset") or 0)) or None
+                except (TypeError, ValueError):
+                    pass
+                return
         except Exception:
-            return
-        if "/graphql/" in url:
-            self.items.append((self._name(url), body))
-        else:
-            self.rest.append((self._name(url), body))
+            pass
+
+    def _done(self, req):
+        """A request whose response has fully arrived: its body can be read without waiting. (Responses
+        still arriving, like the never-ending live_pipeline stream, are never read.)"""
+        try:
+            if self._ours(req.url):
+                self._waiting.append(req)
+        except Exception:
+            pass
+
+    def _read(self):
+        while self._waiting:
+            req = self._waiting.pop(0)
+            try:
+                r = req.response()
+                if r is None or r.status == 429:
+                    continue
+                body = r.json()
+            except Exception:
+                continue
+            (self._items if "/graphql/" in req.url else self._rest).append((self._name(req.url), body))
+
+    @property
+    def items(self):
+        self._read()
+        return self._items
+
+    @property
+    def rest(self):
+        self._read()
+        return self._rest
 
     @staticmethod
     def _name(url):
         u = url.split("?", 1)[0]
         if "/graphql/" in u:
-            return u.split("/graphql/", 1)[1].split("/", 2)[1]
-        return u.split("/i/api/", 1)[1] if "/i/api/" in u else u.split("api.x.com/", 1)[1]
+            parts = u.split("/graphql/", 1)[1].split("/")
+            return parts[1] if len(parts) > 1 else parts[0]
+        return u.split("/i/api/", 1)[1] if "/i/api/" in u else u.split("api.x.com/", 1)[-1]
 
     def ops(self):
         return [op for op, _ in self.items]
@@ -70,10 +103,8 @@ class Capture:
             if not reloaded and getattr(self.page, "spa_url", None) and time.monotonic() - start > 4:
                 reloaded = True
                 self.page.goto(self.page.spa_url, wait_until="domcontentloaded")
-                try:
-                    self.page.evaluate("window.__anyx = 1; window.name = 'anyx'")
-                except Exception:
-                    pass
+                from .session import booted
+                booted(self.page)
                 self.page.spa_url = None
             got = find()
             if got is not None:
@@ -125,6 +156,7 @@ class Capture:
     def detach(self):
         try:
             self.page.remove_listener("response", self._on)
+            self.page.remove_listener("requestfinished", self._done)
         except Exception:
             pass
 
