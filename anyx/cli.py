@@ -274,8 +274,13 @@ def _help(cmd):
     return "\n".join(out)
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):           # one line instead of argparse's usage dump
+        raise UsageError(message)
+
+
 def _parser():
-    ap = argparse.ArgumentParser(prog="anyx", add_help=False)
+    ap = _Parser(prog="anyx", add_help=False)
     sub = ap.add_subparsers(dest="cmd")
 
     def add(name, *args, **kw):
@@ -353,8 +358,10 @@ def run(argv):
         return 0
     try:
         a = _parser().parse_args(argv)
-    except SystemExit:
-        raise UsageError(f"bad arguments (anyx {argv[0]} --help)")
+    except UsageError as e:
+        if "invalid choice" in str(e):
+            raise UsageError(f"no command {argv[0]} (anyx --help)")
+        raise UsageError(f"{e} (anyx {argv[0]} --help)")
     if not a.cmd:
         raise UsageError("no command (anyx --help)")
 

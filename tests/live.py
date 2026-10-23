@@ -63,6 +63,17 @@ def step(name, fn, expect=None, soft=False):
     return out
 
 
+def write_mp4(path):
+    """A 3-second test clip, made with ffmpeg. None (and the video step is skipped) without ffmpeg."""
+    import shutil
+    import subprocess
+    if not shutil.which("ffmpeg"):
+        return None
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=3",
+                    "-pix_fmt", "yuv420p", "-c:v", "libx264", path], check=True)
+    return path
+
+
 def write_png(path, w, h, rgb):
     """A plain one-colour PNG, made without a browser or an image library."""
     import struct
@@ -179,11 +190,22 @@ def main():
                   lambda o: bool(o.get("id")))
         if m1:
             step("image is attached", lambda: x.tweet(m1["id"]), lambda t: len(t["media"]) == 1)
+        v1 = None
+        vid = write_mp4(os.path.join(tmp, "clip.mp4"))
+        if vid:
+            v1 = step("post with video", lambda: x.post(f"anyx live test video {tag}", media=[vid]),
+                      lambda o: bool(o.get("id")))
+            if v1:
+                step("video is attached", lambda: x.tweet(v1["id"]),
+                     lambda t: (t["media"] or [{}])[0].get("type") == "video")
         at = (datetime.now() + timedelta(days=2)).replace(hour=3, minute=17, second=0, microsecond=0)
         step("schedule", lambda: x.post(f"anyx live test scheduled {tag}", at=at), lambda o: o.get("result") == "scheduled")
-        step("scheduled", x.scheduled, lambda l: any(tag in s for s in l))
+        step("scheduled", x.scheduled, lambda l: any(tag in s["text"] for s in l))
+        step("move scheduled", lambda: x.reschedule(f"scheduled {tag}", at + timedelta(days=1)),
+             lambda o: o["result"] == "moved")
         step("delete scheduled", lambda: x.delete_scheduled([f"scheduled {tag}"]), lambda o: o["deleted"] == 1)
-        for name, o in (("delete post", p1), ("delete reply", r1), ("delete quote", q1), ("delete image post", m1)):
+        for name, o in (("delete post", p1), ("delete reply", r1), ("delete quote", q1), ("delete image post", m1),
+                        ("delete video post", v1)):
             if o and o.get("id"):
                 step(name, lambda i=o["id"]: x.delete(i), lambda r: r["result"] == "deleted")
 
@@ -201,7 +223,7 @@ def main():
         for i in (t4 or {}).get("ids", []):
             step("delete thread post", lambda i=i: x.delete(i), lambda r: r["result"] == "deleted")
         step("draft", lambda: x.post("test draft " + tag, draft=True), lambda o: o["result"] == "saved")
-        step("drafts", x.drafts, lambda l: any(tag in d for d in l))
+        step("drafts", x.drafts, lambda l: any(tag in d["text"] for d in l))
         step("delete draft", lambda: x.delete_drafts([tag]), lambda o: o["deleted"] == 1)
         mine_posts = step("posts (me)", lambda: x.timeline(a.me, limit=3), lambda l: isinstance(l, list))
         if mine_posts:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anyx"
-version = "0.1.0"
+version = "0.1.1"
 description = "Use X (Twitter) from any browser, as any of your accounts, from the command line or Python. No API keys."
 readme = "README.md"
 license = "MIT"
