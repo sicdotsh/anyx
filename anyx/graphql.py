@@ -61,32 +61,35 @@ class Capture:
     def of(self, *names):
         return [b for op, b in self.items if not names or op in names]
 
-    def wait_for(self, names, timeout=30.0, after=0):
-        """Wait until a response whose operation is in `names` arrives (counting from index `after`).
-        If the page was changed inside X's app and X answered from its cache (nothing fetched), the page
-        is loaded for real once, a third of the way into the wait."""
+    def _wait(self, find, timeout):
+        """Poll `find` until it returns something. If the page was changed inside X's app and X answered
+        from its cache (nothing fetched), the page is loaded for real once, 4 s into the wait."""
         start = time.monotonic()
-        end = start + timeout
         reloaded = False
-        while time.monotonic() < end:
-            # X answers revisits from its cache without fetching; don't wait long before loading for real
+        while time.monotonic() < start + timeout:
             if not reloaded and getattr(self.page, "spa_url", None) and time.monotonic() - start > 4:
                 reloaded = True
-                url = self.page.spa_url
-                self.page.goto(url, wait_until="domcontentloaded")
+                self.page.goto(self.page.spa_url, wait_until="domcontentloaded")
                 try:
-                    self.page.evaluate("window.__anyx = 1")
+                    self.page.evaluate("window.__anyx = 1; window.name = 'anyx'")
                 except Exception:
                     pass
                 self.page.spa_url = None
-            for op, b in self.items[after:]:
-                if op in names:
-                    return b
-            hit = [n for n in self.limited if n in names]
-            if hit:
-                raise self.limit_error(hit[0])
+            got = find()
+            if got is not None:
+                return got
             self.page.wait_for_timeout(200)
         return None
+
+    def wait_for(self, names, timeout=30.0, after=0):
+        """Wait until a response whose operation is in `names` arrives (counting from index `after`)."""
+        def find():
+            b = next((b for op, b in self.items[after:] if op in names), None)
+            hit = [n for n in self.limited if n in names]
+            if b is None and hit:
+                raise self.limit_error(hit[0])
+            return b
+        return self._wait(find, timeout)
 
     @staticmethod
     def refusal(body):
@@ -116,24 +119,8 @@ class Capture:
         return RateLimited(f"X answered 429 for {what} (rate limited; usually ~15 minutes)")
 
     def wait_rest(self, path_part, timeout=30.0, after=0):
-        start = time.monotonic()
-        end = start + timeout
-        reloaded = False
-        while time.monotonic() < end:
-            if not reloaded and getattr(self.page, "spa_url", None) and time.monotonic() - start > 4:
-                reloaded = True
-                url = self.page.spa_url
-                self.page.goto(url, wait_until="domcontentloaded")
-                try:
-                    self.page.evaluate("window.__anyx = 1")
-                except Exception:
-                    pass
-                self.page.spa_url = None
-            for p, b in self.rest[after:]:
-                if path_part in p:
-                    return b
-            self.page.wait_for_timeout(200)
-        return None
+        """Wait until a REST response whose path contains `path_part` arrives."""
+        return self._wait(lambda: next((b for p, b in self.rest[after:] if path_part in p), None), timeout)
 
     def detach(self):
         try:

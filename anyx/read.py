@@ -239,8 +239,10 @@ def home(self, limit=40, following=False):
     cap = graphql.Capture(p)
     try:
         self.goto(p, "https://x.com/home")
-        if following:
-            tab = p.get_by_role("tab").nth(1)
+        # X opens home on the tab chosen last time: pick the asked one (For you, Following)
+        tab = p.locator('[data-testid="primaryColumn"] [role="tab"]').nth(1 if following else 0)
+        tab.wait_for(state="visible", timeout=20000)
+        if tab.get_attribute("aria-selected") != "true":
             tab.click()
         if cap.wait_for(p_ops, timeout=30) is None:
             raise NotFound("home timeline did not load")

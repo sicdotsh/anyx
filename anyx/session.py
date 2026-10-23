@@ -17,7 +17,9 @@ from .errors import NotFound, SessionExpired, UIChanged, UsageError, WrongAccoun
 
 
 def tweet_id(ref):
-    m = re.search(r"(\d{6,})", str(ref))
+    """A post URL (…/status/<id>, …/statuses/<id>) or a bare id."""
+    s = str(ref).strip()
+    m = re.search(r"/status(?:es)?/(\d+)", s) or re.fullmatch(r"(\d+)", s)
     if not m:
         raise UsageError(f"not a post URL or id: {ref}")
     return m.group(1)
