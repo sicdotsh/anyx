@@ -82,7 +82,9 @@ class Session:
             cookies = vault.with_others(self.handle, cookies, config.sharing(self.handle))
         self.account["_force"] = self.force
         if self.handle and cookies is None and self.account["browser"] != "cdp":
-            raise UsageError(f"no cookies for @{self.handle} (anyx accounts login {self.handle} --file <creds>)")
+            how = (f"anyx accounts harvest --browser adspower --profile {self.account.get('profile') or '<profile>'}"
+                   if self.account["browser"] == "adspower" else f"anyx accounts login {self.handle} --file <creds>")
+            raise UsageError(f"no cookies for @{self.handle} yet ({how})")
         b = vault.born(self.handle) if self.handle else None
         if cookies and not vault.same_place(b, self.account):
             import sys as _s
