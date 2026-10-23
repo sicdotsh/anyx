@@ -15,14 +15,16 @@ from contextlib import contextmanager
 
 from ..errors import AnyxError, UsageError
 
-LOCK = "/tmp/adspower-api.lock"
+LOCK = "/tmp/adspower-api.lock"     # shared with other tools that call AdsPower, so all of them keep the gap
 GAP = 1.1
 DEFAULT_API = "http://local.adspower.net:50325"
 
 
 @contextmanager
 def _gate():
-    with open(LOCK, "a") as f:
+    # O_NOFOLLOW: a link planted at that /tmp path is not followed
+    fd = os.open(LOCK, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o666)
+    with os.fdopen(fd, "a") as f:
         deadline = time.monotonic() + 150
         while True:
             try:

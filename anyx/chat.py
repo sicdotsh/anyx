@@ -28,7 +28,8 @@ def _pin(handle):
 
 def _save_pin(handle, pin):
     p = _pin_path(handle)
-    os.makedirs(os.path.dirname(p), exist_ok=True)
+    from . import config
+    config.mkdir(os.path.dirname(p))
     with open(p, "w") as f:
         f.write(pin)
     os.chmod(p, 0o600)

@@ -37,6 +37,16 @@ ACCOUNTS = os.path.join(HOME, "accounts")
 PROFILES = os.path.join(HOME, "profiles")
 
 
+def mkdir(path):
+    """Make a folder under ~/.anyx readable by this user only (cookies and browser profiles live here)."""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    for d in (HOME, path):
+        try:
+            os.chmod(d, 0o700)
+        except OSError:
+            pass
+
+
 def load():
     if not os.path.exists(CONFIG):
         return {"default_browser": "chromium", "accounts": {}}
@@ -48,7 +58,7 @@ def load():
 
 
 def save(cfg):
-    os.makedirs(HOME, exist_ok=True)
+    mkdir(HOME)
     tmp = CONFIG + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)

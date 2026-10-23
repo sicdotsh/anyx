@@ -14,7 +14,7 @@ import subprocess
 import time
 import urllib.request
 
-from .. import config, run
+from .. import config, run, vault
 from ..errors import AnyxError
 
 
@@ -70,8 +70,10 @@ class Chromium:
         return self.ctx
 
     def _start(self, pw, handle, account, headless):
+        vault.path(handle)                  # refuses what is not a handle: it becomes a folder name
         d = os.path.join(config.PROFILES, handle.lower())
-        os.makedirs(d, exist_ok=True)
+        config.mkdir(config.PROFILES)
+        config.mkdir(d)
         port = _free_port()
         args = [_executable(pw, self.channel), f"--remote-debugging-port={port}", f"--user-data-dir={d}",
                 "--no-first-run", "--no-default-browser-check", "--window-size=1280,1000",

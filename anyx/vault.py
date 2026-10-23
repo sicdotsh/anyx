@@ -8,6 +8,7 @@ Switching never goes through X's account switcher.
 
 import json
 import os
+import re
 import urllib.parse
 
 from . import config
@@ -23,7 +24,11 @@ DOMAIN = ".x.com"
 
 
 def path(handle):
-    return os.path.join(config.ACCOUNTS, handle.lstrip("@").lower() + ".json")
+    h = handle.lstrip("@").lower()
+    if not re.fullmatch(r"[a-z0-9_]{1,50}", h):
+        from .errors import UsageError
+        raise UsageError(f"not a handle: {handle}")
+    return os.path.join(config.ACCOUNTS, h + ".json")
 
 
 def load(handle):
@@ -35,7 +40,7 @@ def load(handle):
 
 
 def save(handle, cookies):
-    os.makedirs(config.ACCOUNTS, exist_ok=True)
+    config.mkdir(config.ACCOUNTS)
     p = path(handle)
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -166,7 +171,7 @@ def born(handle):
 
 
 def set_born(handle, browser, profile=None):
-    os.makedirs(config.ACCOUNTS, exist_ok=True)
+    config.mkdir(config.ACCOUNTS)
     with open(_meta_path(handle), "w", encoding="utf-8") as f:
         json.dump({"born": {"browser": browser, "profile": profile}}, f)
 

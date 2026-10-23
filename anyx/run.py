@@ -12,6 +12,7 @@ config.json turns them on: how hard to drive an account is the user's call.
 
 import json
 import os
+import re
 import random
 import time
 
@@ -25,7 +26,7 @@ COOL_REFUSED = 60 * 60     # X refused something without a clear reason
 
 
 def _path(handle):
-    return os.path.join(RUN, (handle or "_").lower() + ".json")
+    return os.path.join(RUN, re.sub(r"[^a-z0-9_.-]", "_", (handle or "_").lower()).lstrip(".") + ".json")
 
 
 def load(handle):
@@ -37,7 +38,7 @@ def load(handle):
 
 
 def save(handle, **fields):
-    os.makedirs(RUN, exist_ok=True)
+    config.mkdir(RUN)
     d = load(handle)
     d.update(fields)
     tmp = _path(handle) + ".tmp"
@@ -51,7 +52,7 @@ def forget(handle, *keys):
     d = load(handle)
     for k in keys:
         d.pop(k, None)
-    os.makedirs(RUN, exist_ok=True)
+    config.mkdir(RUN)
     with open(_path(handle), "w", encoding="utf-8") as f:
         json.dump(d, f)
 

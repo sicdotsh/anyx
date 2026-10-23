@@ -11,4 +11,4 @@ from .errors import (ActionFailed, AnyxError, NotFound, RateLimited, SessionExpi
                      UsageError, WrongAccount)
 from .session import Session  # noqa: F401
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
