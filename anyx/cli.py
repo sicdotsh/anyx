@@ -1,6 +1,6 @@
 """anyx — use X from any browser, as any of your accounts. No API keys.
 
-usage: anyx [--as HANDLE|a,b,c|all] [--json] [--show] [--wait] [-j N] [--browser NAME] <command> ...
+usage: anyx [--as HANDLE|a,b,c|all] [--json] [--show] [--wait] [--force] [-j N] [--browser NAME] <command> ...
        anyx <command> --help
 
 read
@@ -81,7 +81,8 @@ Each account's browser stays open between commands and pages change inside X's a
 reloading. Pausing ("pace") and resting accounts after X pushes back ("rest") are off unless
 ~/.anyx/config.json turns them on. --as picks the account (default: the only one, or ANYX_ACCOUNT); a,b,c or all runs the command as each,
 N at a time (-j, default 4). --json prints JSON. --show opens a visible window. --wait sleeps through
-rate limits until X says they lift, then carries on. Exit codes: 0 ok, 2 usage, 3 logged out, 4 wrong account, 5 X changed its page,
+rate limits until X says they lift, then carries on. --force switches a shared AdsPower profile to the
+account even while someone is using it on another. Exit codes: 0 ok, 2 usage, 3 logged out, 4 wrong account, 5 X changed its page,
 6 rate limited, 7 not found, 8 X did not confirm.
 """
 

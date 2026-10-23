@@ -95,6 +95,16 @@ def account(handle):
     return a
 
 
+def sharing(handle):
+    """The accounts kept in the same browser profile as `handle` (an AdsPower profile, a CDP browser)."""
+    cfg = load()
+    a = cfg["accounts"].get(handle.lstrip("@").lower(), {})
+    if not (a.get("profile") or a.get("cdp")):
+        return []
+    key = (a.get("browser"), a.get("profile"), a.get("cdp"))
+    return [h for h, b in cfg["accounts"].items() if (b.get("browser"), b.get("profile"), b.get("cdp")) == key]
+
+
 def set_account(handle, **fields):
     cfg = load()
     a = cfg["accounts"].setdefault(handle.lstrip("@").lower(), {})

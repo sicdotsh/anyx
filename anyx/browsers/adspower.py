@@ -84,7 +84,12 @@ class AdsPower:
 
     def open(self, pw, handle, account, cookies, headless=True):
         """Attach to the profile if it is already open (left open by an earlier command, or by hand);
-        start it otherwise. It is left open afterwards."""
+        start it otherwise, with its window (adspower.headless in config starts it without). It is left
+        open afterwards.
+
+        The profile is shared with whoever else opens it. Its accounts are swapped the way X's own
+        switcher does (the others stay in auth_multi), and never under a person: if the profile shows an
+        account anyx did not put there, or has more than one x.com tab, anyx stops instead (--force swaps)."""
         from .. import run
         self._setup(account)
         if not account.get("profile"):
@@ -96,12 +101,10 @@ class AdsPower:
         st = self.call("/api/v1/browser/active", user_id=self.uid)
         ws = ((st.get("data") or {}).get("ws") or {}).get("puppeteer") if (st.get("data") or {}).get("status") == "Active" else None
         if not ws:
-            if cookies:
-                r = self.call("/api/v1/user/update", method="POST", user_id=self.uid, cookie=json.dumps(cookies))
-                if r.get("code") != 0:
-                    raise AnyxError(f"AdsPower refused the cookies: {r.get('msg')}")
-                time.sleep(1.5)
-            r = self.call("/api/v1/browser/start", user_id=self.uid, headless="1" if headless else "0", open_tabs=1)
+            # x.com's cookies are put in after the start, through the browser: the profile's own cookie
+            # list (other sites' logins among it) is left alone
+            hidden = bool((account.get("_adspower") or {}).get("headless"))
+            r = self.call("/api/v1/browser/start", user_id=self.uid, headless="1" if hidden else "0", open_tabs=1)
             if r.get("code") != 0:
                 raise AnyxError(f"AdsPower could not start {account['profile']}: {r.get('msg')}")
             ws = r["data"]["ws"]["puppeteer"]
@@ -109,13 +112,34 @@ class AdsPower:
         browser = pw.chromium.connect_over_cdp(ws)
         self.ctx = browser.contexts[0]
         if cookies:
-            have = {c["name"]: c["value"] for c in self.ctx.cookies("https://x.com")}
-            if have.get("auth_token") != {c["name"]: c["value"] for c in cookies}.get("auth_token"):
+            from .. import vault
+            jar = self.ctx.cookies("https://x.com")
+            have = {c["name"]: c["value"] for c in jar}
+            want = {c["name"]: c["value"] for c in cookies}
+            if have.get("auth_token") != want.get("auth_token"):
+                if not self.fresh and not account.get("_force"):
+                    self._refuse_swap(account["profile"], handle, vault.user_id(vault.normalize(jar)))
                 self.ctx.clear_cookies(domain=".x.com")
                 self.ctx.add_cookies(cookies)
                 self.fresh = True
+            elif have.get("auth_multi") != want.get("auth_multi") and want.get("auth_multi"):
+                # the same account, but the others were missing: put them back without a reload
+                self.ctx.add_cookies([c for c in cookies if c["name"] == "auth_multi"])
+            run.save("adspower-" + self.uid, user=vault.user_id(cookies))
         run.save(handle, browser={"kind": "adspower", "profile": account["profile"], "user_id": self.uid})
         return self.ctx
+
+    def _refuse_swap(self, profile, handle, current):
+        from .. import run, vault
+        tabs = [p for p in self.ctx.pages if p.url.startswith("https://x.com")]
+        mine = run.load("adspower-" + self.uid).get("user")
+        who = "@" + (vault.holder(current) or str(current)) if current else "no account"
+        if current and current != mine:
+            raise UsageError(f"AdsPower profile {profile} shows {who}, which anyx did not put there; anyx does not "
+                             f"swap it for @{handle} under whoever is using it (--force to swap anyway)")
+        if len(tabs) > 1:
+            raise UsageError(f"AdsPower profile {profile} has {len(tabs)} x.com tabs open as {who}; anyx does not "
+                             f"swap it for @{handle} while someone is using it (--force to swap anyway)")
 
     def close(self):
         # the profile stays open for the next command; `anyx stop` closes it

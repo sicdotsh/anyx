@@ -100,6 +100,29 @@ def split(cookies):
     return sets
 
 
+def with_others(handle, cookies, others):
+    """`handle`'s cookies as X itself leaves a browser where several accounts are logged in: this
+    account's auth_token and twid, and the others in auth_multi, so X's account switcher keeps listing
+    them all (and a person using the browser can still switch by hand)."""
+    pairs = []
+    for h in others:
+        c = load(h) or []
+        uid = user_id(c)
+        tok = next((x["value"] for x in c if x["name"] == "auth_token"), None)
+        if h != handle and uid and tok and uid != user_id(cookies):
+            pairs.append(f"{uid}:{tok}")
+    base = next((c for c in cookies if c["name"] == "auth_token"), None)
+    if not pairs or not base:
+        return cookies
+    return [c for c in cookies if c["name"] != "auth_multi"] + \
+        [dict(base, name="auth_multi", value='"' + "|".join(pairs) + '"')]
+
+
+def holder(uid):
+    """The stored handle whose cookies carry this user id."""
+    return next((h for h in handles() if user_id(load(h) or []) == uid), None)
+
+
 # ---- where a cookie set was born ----
 # A login belongs to the browser it happened in. Using its cookies in another browser looks to X like one
 # session jumping between devices, which X answers by refusing things (seen: unblock -> 34). So each set

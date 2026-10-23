@@ -68,9 +68,10 @@ def import_file(handle, path, browser=None, profile=None):
 
 def harvest(browser, profile=None, cdp=None, set_browser=True):
     """Store every account logged into one browser. With AdsPower each account is opened once to learn
-    its handle, then the browser is left as the first account it was."""
+    its handle, then the browser gets back exactly the cookies it had (every account still logged in)."""
     from playwright.sync_api import sync_playwright
-    acct = {"browser": browser, "profile": profile, "cdp": cdp, "_adspower": config.load().get("adspower", {})}
+    acct = {"browser": browser, "profile": profile, "cdp": cdp, "_adspower": config.load().get("adspower", {}),
+            "_force": True}
     drv = browsers.get(browser)
     out = {}
     with sync_playwright() as pw:
@@ -105,12 +106,14 @@ def harvest(browser, profile=None, cdp=None, set_browser=True):
                 config.set_account(who, browser=browser, profile=profile, cdp=cdp)
             out[uid] = who
         if browser == "adspower" and active in sets:
-            # leave the profile logged in as the account it showed before
+            # give the profile back its own cookies: the account it showed, the others in auth_multi
             drv = browsers.get(browser)
-            drv._setup(acct)
-            import json as _j
-            drv.call("/api/v1/user/update", method="POST", user_id=drv.profile_id(profile),
-                     cookie=_j.dumps(sets[active]))
+            ctx = drv.open(pw, "_harvest", acct, None, headless=True)
+            try:
+                ctx.clear_cookies(domain=".x.com")
+                ctx.add_cookies(vault.normalize(jar))
+            finally:
+                drv.close()
     return [{"user_id": u, "user": h} for u, h in out.items()]
 
 

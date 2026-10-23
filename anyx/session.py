@@ -76,6 +76,9 @@ class Session:
             raise RateLimited(f"@{self.handle} is resting for {left // 60}m{left % 60:02d}s after: {c[1]} "
                               f"(anyx does nothing as this account until then)", c[0])
         cookies = vault.load(self.handle) if self.handle else None
+        if cookies:
+            cookies = vault.with_others(self.handle, cookies, config.sharing(self.handle))
+        self.account["_force"] = self.force
         if self.handle and cookies is None and self.account["browser"] != "cdp":
             raise UsageError(f"no cookies for @{self.handle} (anyx accounts login {self.handle} --file <creds>)")
         b = vault.born(self.handle) if self.handle else None
