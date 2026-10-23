@@ -147,7 +147,7 @@ def _notification_items(bodies):
                     posts = [graphql.tweet((x.get("tweet_results") or {}).get("result")) for x in t.get("target_objects") or []]
                     out.append({"kind": ICONS.get(ic.get("notification_icon"), ic.get("notification_icon")),
                                 "text": (ic.get("rich_message") or {}).get("text"),
-                                "time": ic.get("timestamp_ms"),
+                                "time": graphql.when_ms(ic.get("timestamp_ms")),
                                 "users": [u["handle"] for u in users if u],
                                 "posts": [x["id"] for x in posts if x],
                                 "id": ic.get("id")})

@@ -180,7 +180,7 @@ def main():
         if m1:
             step("image is attached", lambda: x.tweet(m1["id"]), lambda t: len(t["media"]) == 1)
         at = (datetime.now() + timedelta(days=2)).replace(hour=3, minute=17, second=0, microsecond=0)
-        step("schedule", lambda: x.post(f"anyx live test scheduled {tag}", at=at), lambda o: bool(o.get("scheduled")))
+        step("schedule", lambda: x.post(f"anyx live test scheduled {tag}", at=at), lambda o: o.get("result") == "scheduled")
         step("scheduled", x.scheduled, lambda l: any(tag in s for s in l))
         step("delete scheduled", lambda: x.delete_scheduled([f"scheduled {tag}"]), lambda o: o["deleted"] == 1)
         for name, o in (("delete post", p1), ("delete reply", r1), ("delete quote", q1), ("delete image post", m1)):

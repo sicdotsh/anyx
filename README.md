@@ -98,9 +98,10 @@ Before anything is done, anyx checks that the browser really is the account aske
 | `chromium` | Playwright's Chromium with a profile per account under `~/.anyx/profiles/`. The default. |
 | `chrome` | Your installed Google Chrome, same layout. |
 | `cdp` | A browser you started with `--remote-debugging-port`. anyx attaches and leaves it running. |
-| `adspower` | An AdsPower profile, started through AdsPower's Local API (`ADSPOWER_API_KEY`). |
+| `adspower` | An AdsPower profile, started through AdsPower's Local API. Its key is stored once with `anyx config set adspower.key KEY` (or read from `ADSPOWER_API_KEY`). |
 
 ```
+anyx config set adspower.key KEY
 anyx accounts set bob --browser adspower --profile x-bob
 anyx accounts set carol --browser cdp --cdp http://127.0.0.1:9222
 anyx accounts set dave --proxy http://user:pass@host:port

@@ -7,7 +7,7 @@ so it changes far less often.
 """
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 from .errors import RateLimited
 
@@ -148,9 +148,20 @@ def _when(s):
     if not s:
         return None
     try:
-        return datetime.strptime(s, "%a %b %d %H:%M:%S %z %Y").astimezone(timezone.utc).isoformat()
+        return datetime.strptime(s, "%a %b %d %H:%M:%S %z %Y").astimezone().isoformat()
     except ValueError:
         return s
+
+
+def when_ms(ms):
+    """X's millisecond (or ISO) timestamps, as local time with its offset (like every other time anyx prints)."""
+    if not ms:
+        return None
+    if str(ms).isdigit():
+        t = datetime.fromtimestamp(int(ms) / 1000)
+    else:                                   # newer responses carry an ISO time instead
+        t = datetime.fromisoformat(str(ms).replace("Z", "+00:00"))
+    return t.astimezone().isoformat(timespec="seconds")
 
 
 def _int(v):

@@ -10,6 +10,7 @@ if it is not the one asked for, it stops without touching anything.
 """
 
 import re
+import time
 
 from . import browsers, config, vault
 from .errors import NotFound, SessionExpired, UIChanged, UsageError, WrongAccount
@@ -165,6 +166,9 @@ class Session:
         booted = False
         try:
             booted = page.url.startswith("https://x.com/") and page.evaluate("window.__anyx === 1")
+            # a sheet or modal left open by an earlier step would sit over the next page: load for real
+            if booted and page.locator('#layers [data-testid="mask"]').count():
+                booted = False
         except Exception:
             booted = False
         if booted and url.startswith("https://x.com/") and "/i/flow/" not in url:
@@ -216,25 +220,26 @@ class Session:
     def whoami(self):
         """The handle the browser is logged in as, asked from X itself (its Viewer query)."""
         from . import graphql
-        from .errors import RateLimited
         p = self.page()
         cap = graphql.Capture(p)
         try:
             self.goto(p, "https://x.com/home")
-            b = cap.wait_for(("Viewer", "ViewerAccountSync"), timeout=30)
-            if b is None and any(n in ("Viewer",) for n in cap.limited):
-                raise cap.limit_error("Viewer")
-            _, us = graphql.walk([b] if b else [])
-            if us and us[0].get("handle"):
-                return us[0]["handle"]
+            # X answers with its Viewer query on a fresh load, and only draws the profile link when it
+            # serves the app from cache: take whichever comes first
             link = p.locator('[data-testid="AppTabBar_Profile_Link"]')
-            try:
-                link.wait_for(state="attached", timeout=20000)
-            except Exception:
+            end = time.monotonic() + 30
+            while time.monotonic() < end:
+                _, us = graphql.walk(cap.of("Viewer", "ViewerAccountSync"))
+                if us and us[0].get("handle"):
+                    return us[0]["handle"]
+                if link.count():
+                    break
                 if "/login" in p.url or "/i/flow/login" in p.url:
                     raise SessionExpired("logged out")
                 if cap.limited:
                     raise cap.limit_error(cap.limited[0])
+                p.wait_for_timeout(250)
+            else:
                 raise UIChanged("could not find who is logged in on the home page")
             return (link.get_attribute("href") or "").strip("/")
         finally:

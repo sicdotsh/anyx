@@ -1,6 +1,7 @@
 """anyx — use X from any browser, as any of your accounts. No API keys.
 
 usage: anyx [--as HANDLE|a,b,c|all] [--json] [--show] [--wait] [-j N] [--browser NAME] <command> ...
+       anyx <command> --help
 
 read
   tweet <post>                      one post with its counts and media
@@ -22,8 +23,10 @@ write
        [--poll "a|b|c" [--poll-days D] [--poll-hours H] [--poll-minutes M]]
        [--who everyone|following|verified|mentioned] [--thread t2 t3 ...] [--draft]
   delete <post> ...
-  scheduled [--delete <text> ...] [--move <text> --at "YYYY-MM-DD HH:MM"]
-  drafts [--delete <text> ...]
+  scheduled                         scheduled posts: id, time, text, what they quote or answer
+  scheduled --delete <id|text> ...  cancel them (text: a part that matches exactly one)
+  scheduled --move <id|text> --at "YYYY-MM-DD HH:MM"
+  drafts [--delete <id|text> ...]   drafts, or delete them
   like | unlike | retweet | unretweet | bookmark | unbookmark | pin | unpin  <post> ...
   follow | unfollow | mute | unmute | block | unblock  <handle> ...
   profile [--name] [--bio] [--location] [--website] [--avatar f] [--banner f] [--drop-banner]
@@ -54,6 +57,12 @@ chat
   messages <handle|conversation> [-n N]
   dm <handle|conversation> <text> [--media f ...]
 
+config
+  config                            what ~/.anyx/config.json holds (the AdsPower key shown cut)
+  config set <name> <value>         adspower.key KEY, adspower.api URL, default_browser NAME,
+                                    rest true, pace.page [2,5], pace.write [6,14]
+  config unset <name>
+
 accounts
   accounts list
   accounts login <handle>|- --file creds.tsv [--browser NAME]   log in with password (+ TOTP); the usual way
@@ -66,7 +75,8 @@ accounts
   accounts check <handle>|all                ok, expired, locked, suspended, rate_limited (and whether its posts show in search)
   whoami
 
-<post> is a URL or an id; <handle> is a handle, @handle or profile URL.
+<post> is a URL or an id; <handle> is a handle, @handle or profile URL. Times are local, both in
+--at and in what anyx prints (with the offset, 2026-10-25T03:17+09:00).
 Each account's browser stays open between commands and pages change inside X's app instead of
 reloading. Pausing ("pace") and resting accounts after X pushes back ("rest") are off unless
 ~/.anyx/config.json turns them on. --as picks the account (default: the only one, or ANYX_ACCOUNT); a,b,c or all runs the command as each,
@@ -78,6 +88,7 @@ rate limits until X says they lift, then carries on. Exit codes: 0 ok, 2 usage, 
 import argparse
 import json
 import os
+import re
 import sys
 
 from . import accounts, browsers, config, vault
@@ -215,9 +226,12 @@ def _print(out, as_json):
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return
     if isinstance(out, list):
-        for o in out:
-            print(_fmt(o))
-            print()
+        rows = [_fmt(o) for o in out]
+        gap = any("\n" in r for r in rows)      # a blank line only between items of several lines
+        for r in rows:
+            print(r)
+            if gap:
+                print()
         print(f"({len(out)})")
     else:
         print(_fmt(out))
@@ -235,9 +249,29 @@ def _fmt(o):
     if isinstance(o, dict) and "status" in o and "mine" in o:
         who = "me" if o["mine"] else (o.get("sender") or "?")
         return f"[{o.get('time') or ''}] {who}: {o.get('text') or ''}" + "".join(f"\n  [media] {m}" for m in o.get("media") or [])
+    if isinstance(o, dict) and {"id", "text", "media", "thread"} <= o.keys():       # scheduled / drafts
+        extra = [f"{k}={o[k]}" for k in ("quote", "reply_to", "media", "thread") if o.get(k)]
+        return "  ".join([o["id"]] + ([o["at"]] if o.get("at") else []) +
+                         [(o["text"] or "").replace("\n", "\\n")] + extra)
     if isinstance(o, dict):
-        return "  ".join(f"{k}={v}" for k, v in o.items())
+        return "  ".join(f"{k}={v}" for k, v in o.items() if v is not None)
     return str(o)
+
+
+def _help(cmd):
+    """The lines of the usage text that are about one command."""
+    out, keep = [], False
+    for line in __doc__.splitlines():
+        if line.startswith("  ") and not line.startswith("   "):
+            heads = [seg.split()[0] for seg in line.strip().split(" | ") if seg.strip()]
+            keep = cmd in heads
+        elif not line.startswith("  "):
+            keep = False
+        if keep:
+            out.append(line)
+    if not out:
+        raise UsageError(f"no command {cmd} (anyx --help)")
+    return "\n".join(out)
 
 
 def _parser():
@@ -295,6 +329,7 @@ def _parser():
     add("whoami")
     add("stop").add_argument("refs", nargs="*")
     add("status").add_argument("refs", nargs="*")
+    s = add("config"); s.add_argument("action", nargs="?"); s.add_argument("args", nargs="*")
     s = add("accounts", "action")
     s.add_argument("args", nargs="*")
     for f in ("--browser", "--profile", "--cdp", "--proxy", "--file"):
@@ -304,8 +339,13 @@ def _parser():
 
 def run(argv):
     g, argv = _globals(argv)
+    if argv[:1] == ["help"] and len(argv) > 1:
+        argv = [argv[1], "--help"]
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__.strip())
+        return 0
+    if "-h" in argv[1:] or "--help" in argv[1:]:
+        print(_help(argv[0]))
         return 0
     if argv[0] in ("-V", "--version"):
         from . import __version__
@@ -314,7 +354,7 @@ def run(argv):
     try:
         a = _parser().parse_args(argv)
     except SystemExit:
-        raise UsageError("bad arguments (anyx --help)")
+        raise UsageError(f"bad arguments (anyx {argv[0]} --help)")
     if not a.cmd:
         raise UsageError("no command (anyx --help)")
 
@@ -335,6 +375,19 @@ def run(argv):
                 rows.append({"user": h, "browser": (st.get("browser") or {}).get("kind") or "-",
                              "resting": f"{int((c[0] - _t.time()) // 60)}m: {c[1]}" if c else "-"})
         _print(rows, g["json"])
+        return 0
+    if a.cmd == "config":
+        if a.action is None:
+            out = config.shown()
+        elif a.action == "set" and len(a.args) == 2:
+            config.set_value(a.args[0], a.args[1])
+            out = {a.args[0]: "set"}
+        elif a.action == "unset" and len(a.args) == 1:
+            config.set_value(a.args[0], None)
+            out = {a.args[0]: "unset"}
+        else:
+            raise UsageError("config | config set <name> <value> | config unset <name>")
+        print(json.dumps(out, ensure_ascii=False, indent=1) if a.action is None else _fmt(out))
         return 0
     if a.cmd == "accounts":
         act, rest = a.action, a.args

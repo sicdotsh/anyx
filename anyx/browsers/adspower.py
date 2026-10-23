@@ -1,7 +1,7 @@
 """AdsPower, through its Local API.
 
-The API key comes from the environment variable named in config (`adspower.key_env`, default
-ADSPOWER_API_KEY) or from `adspower.key`. Calls are serialized per machine with a lock file and
+The API key comes from `adspower.key` in config (`anyx config set adspower.key KEY`), or else from
+the environment variable named by `adspower.key_env` (default ADSPOWER_API_KEY). Calls are serialized per machine with a lock file and
 spaced at least 1.1 s apart, which is what AdsPower tolerates.
 """
 
@@ -68,7 +68,7 @@ class AdsPower:
         self.api = ap.get("api") or os.environ.get("ADSPOWER_API") or DEFAULT_API
         self.key = ap.get("key") or os.environ.get(ap.get("key_env") or "ADSPOWER_API_KEY")
         if not self.key:
-            raise UsageError("AdsPower API key missing: set ADSPOWER_API_KEY (or adspower.key in ~/.anyx/config.json)")
+            raise UsageError("AdsPower API key missing: anyx config set adspower.key <key> (or set ADSPOWER_API_KEY)")
 
     def profile_id(self, name):
         page = 1
@@ -90,7 +90,9 @@ class AdsPower:
         if not account.get("profile"):
             raise UsageError(f"@{handle} uses adspower but has no profile "
                              f"(anyx accounts set {handle} --browser adspower --profile <name>)")
-        self.uid = self.profile_id(account["profile"])
+        last = run.load(handle).get("browser") or {}
+        self.uid = last.get("user_id") if last.get("profile") == account["profile"] else None
+        self.uid = self.uid or self.profile_id(account["profile"])
         st = self.call("/api/v1/browser/active", user_id=self.uid)
         ws = ((st.get("data") or {}).get("ws") or {}).get("puppeteer") if (st.get("data") or {}).get("status") == "Active" else None
         if not ws:
