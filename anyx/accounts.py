@@ -85,8 +85,8 @@ def harvest(browser, profile=None, cdp=None, set_browser=True):
         for uid, cookies in sets.items():
             drv = browsers.get(browser)
             ctx = drv.open(pw, "_harvest", acct, cookies, headless=True)
+            p = ctx.new_page()                  # a tab of its own; the browser's tabs are left alone
             try:
-                p = ctx.pages[0] if ctx.pages else ctx.new_page()
                 p.set_viewport_size({"width": 1280, "height": 1000})   # narrower windows fold the side bar away
                 p.goto("https://x.com/home", wait_until="domcontentloaded")
                 link = p.locator('[data-testid="AppTabBar_Profile_Link"]')
@@ -96,6 +96,7 @@ def harvest(browser, profile=None, cdp=None, set_browser=True):
                 except Exception:
                     who = None
             finally:
+                p.close()
                 drv.close()
             if not who:
                 out[uid] = None

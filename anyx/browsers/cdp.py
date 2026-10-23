@@ -3,14 +3,15 @@ from ..errors import UsageError
 
 class CDP:
     """A browser that is already running with --remote-debugging-port. anyx attaches to it and
-    leaves it running afterwards. If the vault has cookies for the account they are poured in,
-    which switches that browser's x.com login to the account."""
+    leaves it running afterwards. If the vault has cookies for the account, the browser is switched to
+    it through browsers.switch() (the accounts already logged in there stay)."""
 
     def __init__(self):
         self.browser = None
         self.ctx = None
         self.pages = []
         self.fresh = False
+        self.started = False
 
     def open(self, pw, handle, account, cookies, headless=True):
         url = account.get("cdp")
@@ -20,7 +21,8 @@ class CDP:
         self.browser = pw.chromium.connect_over_cdp(url)
         self.ctx = self.browser.contexts[0] if self.browser.contexts else self.browser.new_context()
         if cookies:
-            self.ctx.add_cookies(cookies)
+            from . import switch
+            self.fresh = switch(self.ctx, handle, account, cookies, f"the browser at {url}")
         before = list(self.ctx.pages)
         self._keep = before
         return self.ctx

@@ -7,9 +7,61 @@ cookies poured in, and close it again. Everything X-specific lives above this la
     adspower   An AdsPower profile, started through AdsPower's Local API.
 
 Adding a browser is one class with open() and close().
+
+Every browser may already be logged in to accounts, and may be in use by a person. So anyx works in a
+tab of its own (window.name "anyx"), and switches accounts only through switch() below.
 """
 
+import re
+
 from ..errors import UsageError
+
+MARK = "anyx"
+
+
+def others_tabs(ctx):
+    """x.com tabs that are not anyx's own: someone is using the browser."""
+    out = []
+    for p in ctx.pages:
+        if p.url.startswith("https://x.com"):
+            try:
+                name = p.evaluate("window.name")
+            except Exception:
+                name = None
+            if name != MARK:
+                out.append(p)
+    return out
+
+
+def switch(ctx, handle, account, cookies, where, started=False):
+    """Make the browser `handle`, the way X's own account switcher does: the accounts already logged
+    in stay logged in. Never under a person: when the browser shows an account anyx did not put there,
+    or someone has x.com open in another tab, anyx stops (unless --force, or anyx has just started the
+    browser itself). Returns True when the account changed."""
+    from .. import run, vault
+    key = "browser-" + re.sub(r"\W+", "_", where)
+    jar = ctx.cookies("https://x.com")
+    have = {c["name"]: c["value"] for c in jar}
+    now, want = vault.user_id(vault.normalize(jar)), vault.user_id(cookies)
+    merged = vault.switched(jar, cookies)
+    if have.get("auth_token") == {c["name"]: c["value"] for c in cookies}.get("auth_token"):
+        multi = [c for c in merged if c["name"] == "auth_multi"]
+        if multi and multi[0]["value"] != have.get("auth_multi"):
+            ctx.add_cookies(multi)          # the same account, with the others put back beside it
+        run.save(key, user=want)
+        return False
+    if now and now != want and not started and not account.get("_force"):
+        who = "@" + (vault.holder(now) or now)
+        if now != run.load(key).get("user"):
+            raise UsageError(f"{where} shows {who}, which anyx did not put there; anyx does not switch it to "
+                             f"@{handle} under whoever is using it (--force to switch anyway)")
+        if others_tabs(ctx):
+            raise UsageError(f"{where} has x.com open in another tab as {who}; anyx does not switch it to "
+                             f"@{handle} while someone is using it (--force to switch anyway)")
+    ctx.clear_cookies(domain=".x.com")
+    ctx.add_cookies(merged)
+    run.save(key, user=want)
+    return True
 
 
 def get(name):

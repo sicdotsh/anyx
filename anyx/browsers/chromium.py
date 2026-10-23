@@ -51,6 +51,7 @@ class Chromium:
         self.ctx = None
         self.handle = None
         self.fresh = False
+        self.started = False
 
     def open(self, pw, handle, account, cookies, headless=True):
         self.handle = handle
@@ -58,15 +59,13 @@ class Chromium:
         port = info.get("port") if info.get("kind") == (self.channel or "chromium") else None
         if not (port and _alive(port)):
             port = self._start(pw, handle, account, headless)
-            self.fresh = True
+            self.fresh = self.started = True
         self.browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
         self.ctx = self.browser.contexts[0] if self.browser.contexts else self.browser.new_context()
         if cookies:
-            have = {c["name"]: c["value"] for c in self.ctx.cookies("https://x.com")}
-            want = {c["name"]: c["value"] for c in cookies}
-            if have.get("auth_token") != want.get("auth_token"):
-                self.ctx.clear_cookies(domain=".x.com")
-                self.ctx.add_cookies(cookies)
+            from . import switch
+            if switch(self.ctx, handle, account, cookies, f"the {self.channel or 'chromium'} profile of @{handle}",
+                      started=self.fresh):
                 self.fresh = True
         return self.ctx
 

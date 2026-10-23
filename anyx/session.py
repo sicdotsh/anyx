@@ -143,10 +143,21 @@ class Session:
     # ---- the tab ----
 
     def page(self):
-        """The account's tab (the same one every time)."""
+        """anyx's own tab (window.name "anyx", the same one every time). Tabs a person has open are left
+        alone; a browser anyx has just started lends its first tab."""
+        from .browsers import MARK
         if self._tab is None:
-            pages = [p for p in self.ctx.pages if p.url.startswith("https://x.com")] or self.ctx.pages
-            pg = pages[0] if pages else self.ctx.new_page()
+            pg = None
+            for p in self.ctx.pages:
+                try:
+                    if p.evaluate("window.name") == MARK:
+                        pg = p
+                        break
+                except Exception:
+                    pass
+            if pg is None:
+                pg = self.ctx.pages[0] if getattr(self.driver, "started", False) and self.ctx.pages else self.ctx.new_page()
+                pg.evaluate(f"window.name = '{MARK}'")
             pg.set_viewport_size({"width": 1280, "height": 1000})
             self._tab = Tab(pg)
         return self._tab
@@ -183,7 +194,7 @@ class Session:
         else:
             page.goto(url, wait_until="domcontentloaded")
             try:
-                page.evaluate("window.__anyx = 1")
+                page.evaluate("window.__anyx = 1; window.name = 'anyx'")
             except Exception:
                 pass
             if isinstance(page, Tab):
@@ -199,7 +210,7 @@ class Session:
         url = getattr(page, "spa_url", None) or page.url
         page.goto(url, wait_until="domcontentloaded")
         try:
-            page.evaluate("window.__anyx = 1")
+            page.evaluate("window.__anyx = 1; window.name = 'anyx'")
         except Exception:
             pass
         if isinstance(page, Tab):

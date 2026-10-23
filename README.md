@@ -81,7 +81,7 @@ anyx accounts set carol --browser cdp --cdp http://127.0.0.1:9222
 anyx accounts set dave --proxy http://user:pass@host:port
 ```
 
-Several accounts can share one AdsPower profile. anyx switches between them the way X's account switcher does, so all of them stay logged in and you can still switch by hand. While you are using the profile (it shows an account anyx did not put there, or has more than one x.com tab), anyx stops instead of switching; `--force` switches anyway. AdsPower profiles are started with their window; `anyx config set adspower.headless true` starts them without.
+A browser can be one you use yourself, with accounts already logged in. anyx works in a tab of its own and leaves yours alone. When it switches the browser to another account it does it the way X's account switcher does, so every account stays logged in and you can still switch by hand. While you are using the browser (it shows an account anyx did not put there, or you have x.com open in another tab), anyx stops instead of switching; `--force` switches anyway. AdsPower profiles are started with their window; `anyx config set adspower.headless true` starts them without.
 
 ## Chat
 

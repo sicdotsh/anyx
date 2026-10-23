@@ -118,6 +118,30 @@ def with_others(handle, cookies, others):
         [dict(base, name="auth_multi", value='"' + "|".join(pairs) + '"')]
 
 
+def switched(jar, cookies):
+    """The browser's x.com cookies after switching it to the account in `cookies`, as X's own switcher
+    does: every account already logged in stays (the one that was active moves into auth_multi, with
+    the ones listed there), and the asked one becomes active."""
+    jar, cookies = normalize(jar), normalize(cookies)
+    by = {c["name"]: c for c in jar}
+    pairs = {}
+    if user_id(jar) and "auth_token" in by:
+        pairs[user_id(jar)] = by["auth_token"]["value"]
+    for c in (by.get("auth_multi"), next((c for c in cookies if c["name"] == "auth_multi"), None)):
+        for pair in urllib.parse.unquote(((c or {}).get("value") or "").strip('"')).split("|"):
+            if ":" in pair:
+                u, _, t = pair.partition(":")
+                pairs.setdefault(u.strip(), t.strip())
+    pairs.pop(user_id(cookies), None)
+    out = [c for c in cookies if c["name"] != "auth_multi"]
+    names = {c["name"] for c in out}
+    out += [c for c in jar if c["name"] not in names and c["name"] not in ("auth_token", "twid", "auth_multi")]
+    base = next((c for c in out if c["name"] == "auth_token"), None)
+    if pairs and base:
+        out.append(dict(base, name="auth_multi", value='"' + "|".join(f"{u}:{t}" for u, t in pairs.items()) + '"'))
+    return out
+
+
 def holder(uid):
     """The stored handle whose cookies carry this user id."""
     return next((h for h in handles() if user_id(load(h) or []) == uid), None)
