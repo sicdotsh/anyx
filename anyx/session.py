@@ -122,25 +122,15 @@ class Session:
                     self._pw = None
 
     def _forget_previous_account(self):
-        """The cookies were swapped (another account of the same browser profile was in it). X's app in an
-        open tab still runs as the previous account, and x.com's storage (chat keys among it) is that
-        account's: clear the storage and make the next page change load the app anew."""
-        pg = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
-        try:
-            cdp = self.ctx.new_cdp_session(pg)
-            cdp.send("Storage.clearDataForOrigin", {"origin": "https://x.com",
-                                                    "storageTypes": "indexeddb,local_storage,service_workers,cache_storage"})
-            cdp.detach()
-        except Exception:
-            pass
+        """The browser was switched to this account. X's app in an open tab still runs as the previous
+        one: make the next page change load it anew. x.com's storage is left alone: X keeps it per
+        account (user:<id>:..., xchat_user<id>_...), as its own account switcher does."""
         for p in self.ctx.pages:
             try:
                 if p.url.startswith("https://x.com"):
                     p.evaluate("window.__anyx = 0")
             except Exception:
                 pass
-
-    # ---- the tab ----
 
     def page(self):
         """anyx's own tab (window.name "anyx", the same one every time). Tabs a person has open are left
