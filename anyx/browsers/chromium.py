@@ -104,10 +104,16 @@ class Chromium:
     @staticmethod
     def stop(handle):
         info = run.load(handle).get("browser") or {}
-        if info.get("pid"):
-            try:
-                os.killpg(os.getpgid(info["pid"]), signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
         run.forget(handle, "browser")
-        return bool(info)
+        if not info.get("pid"):
+            return None
+        # only the browser anyx started for this account: the pid may belong to something else by now
+        import subprocess
+        cmd = subprocess.run(["ps", "-o", "command=", "-p", str(info["pid"])], capture_output=True, text=True).stdout
+        if os.path.join(config.PROFILES, handle.lower()) not in cmd:
+            return None
+        try:
+            os.killpg(os.getpgid(info["pid"]), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            return None
+        return "stopped"

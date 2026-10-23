@@ -13,6 +13,9 @@ import urllib.parse
 from . import config
 
 # Cookies that belong to the browser session rather than to an account. Every set carries them.
+# The cookies that say who is logged in. Switching accounts changes these and nothing else (the
+# browser's other x.com cookies, language and theme among them, stay as they are).
+AUTH = ("auth_token", "twid", "auth_multi", "ct0", "kdt")
 SHARED = ("ct0", "guest_id", "guest_id_ads", "guest_id_marketing", "personalization_id", "kdt",
           "lang", "dnt", "des_opt_in", "night_mode", "twtr_pixel_opt_in", "external_referer", "att",
           "__cf_bm", "gt")
@@ -119,7 +122,7 @@ def with_others(handle, cookies, others):
 
 
 def switched(jar, cookies):
-    """The browser's x.com cookies after switching it to the account in `cookies`, as X's own switcher
+    """The login cookies to put in a browser to switch it to the account in `cookies`, as X's own switcher
     does: every account already logged in stays (the one that was active moves into auth_multi, with
     the ones listed there), and the asked one becomes active."""
     jar, cookies = normalize(jar), normalize(cookies)
@@ -133,9 +136,7 @@ def switched(jar, cookies):
                 u, _, t = pair.partition(":")
                 pairs.setdefault(u.strip(), t.strip())
     pairs.pop(user_id(cookies), None)
-    out = [c for c in cookies if c["name"] != "auth_multi"]
-    names = {c["name"] for c in out}
-    out += [c for c in jar if c["name"] not in names and c["name"] not in ("auth_token", "twid", "auth_multi")]
+    out = [c for c in cookies if c["name"] in AUTH and c["name"] != "auth_multi"]
     base = next((c for c in out if c["name"] == "auth_token"), None)
     if pairs and base:
         out.append(dict(base, name="auth_multi", value='"' + "|".join(f"{u}:{t}" for u, t in pairs.items()) + '"'))

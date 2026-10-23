@@ -111,8 +111,7 @@ def harvest(browser, profile=None, cdp=None, set_browser=True):
             drv = browsers.get(browser)
             ctx = drv.open(pw, "_harvest", acct, None, headless=True)
             try:
-                ctx.clear_cookies(domain=".x.com")
-                ctx.add_cookies(vault.normalize(jar))
+                browsers.restore(ctx, jar)
             finally:
                 drv.close()
     return [{"user_id": u, "user": h} for u, h in out.items()]

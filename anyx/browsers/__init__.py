@@ -17,6 +17,42 @@ import re
 from ..errors import UsageError
 
 MARK = "anyx"
+XCOM = re.compile(r"(^|\.)x\.com$")
+
+
+def put(ctx, cookies):
+    """Replace these x.com cookies (by name) and nothing else."""
+    if not cookies:
+        return
+    names = "|".join(sorted({re.escape(c["name"]) for c in cookies}))
+    ctx.clear_cookies(name=re.compile(f"^({names})$"), domain=XCOM)
+    ctx.add_cookies(cookies)
+
+
+def restore(ctx, jar):
+    """Give the browser back exactly the login cookies it had in `jar` (from ctx.cookies)."""
+    from ..vault import AUTH
+    ctx.clear_cookies(name=re.compile("^(" + "|".join(AUTH) + ")$"), domain=XCOM)
+    ctx.add_cookies([c for c in jar if c["name"] in AUTH])
+
+
+def key(where):
+    return "browser-" + re.sub(r"\W+", "_", where)
+
+
+def check_free(ctx, handle, account, where, now):
+    """Stop rather than change who the browser is while a person is using it: it shows an account anyx
+    did not put there, or x.com is open in a tab that is not anyx's."""
+    from .. import run, vault
+    if account.get("_force") or not now:
+        return
+    who = "@" + (vault.holder(now) or now)
+    if now != run.load(key(where)).get("user"):
+        raise UsageError(f"{where} shows {who}, which anyx did not put there; anyx does not switch it to "
+                         f"@{handle} under whoever is using it (--force to switch anyway)")
+    if others_tabs(ctx):
+        raise UsageError(f"{where} has x.com open in another tab as {who}; anyx does not switch it to "
+                         f"@{handle} while someone is using it (--force to switch anyway)")
 
 
 def others_tabs(ctx):
@@ -39,7 +75,7 @@ def switch(ctx, handle, account, cookies, where, started=False):
     or someone has x.com open in another tab, anyx stops (unless --force, or anyx has just started the
     browser itself). Returns True when the account changed."""
     from .. import run, vault
-    key = "browser-" + re.sub(r"\W+", "_", where)
+    k = key(where)
     jar = ctx.cookies("https://x.com")
     have = {c["name"]: c["value"] for c in jar}
     now, want = vault.user_id(vault.normalize(jar)), vault.user_id(cookies)
@@ -47,20 +83,13 @@ def switch(ctx, handle, account, cookies, where, started=False):
     if have.get("auth_token") == {c["name"]: c["value"] for c in cookies}.get("auth_token"):
         multi = [c for c in merged if c["name"] == "auth_multi"]
         if multi and multi[0]["value"] != have.get("auth_multi"):
-            ctx.add_cookies(multi)          # the same account, with the others put back beside it
-        run.save(key, user=want)
+            put(ctx, multi)                 # the same account, with the others put back beside it
+        run.save(k, user=want)
         return False
-    if now and now != want and not started and not account.get("_force"):
-        who = "@" + (vault.holder(now) or now)
-        if now != run.load(key).get("user"):
-            raise UsageError(f"{where} shows {who}, which anyx did not put there; anyx does not switch it to "
-                             f"@{handle} under whoever is using it (--force to switch anyway)")
-        if others_tabs(ctx):
-            raise UsageError(f"{where} has x.com open in another tab as {who}; anyx does not switch it to "
-                             f"@{handle} while someone is using it (--force to switch anyway)")
-    ctx.clear_cookies(domain=".x.com")
-    ctx.add_cookies(merged)
-    run.save(key, user=want)
+    if now != want and not started:
+        check_free(ctx, handle, account, where, now)
+    put(ctx, merged)
+    run.save(k, user=want)
     return True
 
 

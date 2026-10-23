@@ -114,6 +114,12 @@ class AdsPower:
             from . import switch
             if switch(self.ctx, handle, account, cookies, f"AdsPower profile {account['profile']}", started=self.fresh):
                 self.fresh = True
+        from . import key
+        k = key(f"AdsPower profile {account['profile']}")
+        if self.started:
+            run.save(k, started=True, ws=ws)
+        elif run.load(k).get("ws") != ws:
+            run.save(k, started=False, ws=ws)       # opened by someone else since: theirs to close
         run.save(handle, browser={"kind": "adspower", "profile": account["profile"], "user_id": self.uid})
         return self.ctx
 
@@ -126,11 +132,21 @@ class AdsPower:
 
     @staticmethod
     def stop(handle):
+        """Close the profile if anyx started it. One a person opened is theirs: it is left open."""
         from .. import config, run
+        from . import key
         info = run.load(handle).get("browser") or {}
-        if info.get("user_id"):
-            a = AdsPower()
-            a._setup(config.account(handle))
-            a.call("/api/v1/browser/stop", user_id=info["user_id"])
         run.forget(handle, "browser")
-        return bool(info)
+        if not info.get("user_id"):
+            return None
+        k = key(f"AdsPower profile {info.get('profile')}")
+        st = run.load(k)
+        if not st.get("ws"):
+            return None                     # already closed
+        if not st.get("started"):
+            return "left open (not started by anyx)"
+        a = AdsPower()
+        a._setup(config.account(handle))
+        a.call("/api/v1/browser/stop", user_id=info["user_id"])
+        run.save(k, started=False, ws=None)
+        return "stopped"

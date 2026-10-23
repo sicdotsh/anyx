@@ -374,9 +374,9 @@ def run(argv):
             st = _run.load(h)
             if a.cmd == "stop":
                 kind = (st.get("browser") or {}).get("kind")
-                done = browsers.get(kind if kind in browsers.NAMES else "chromium").stop(h) if kind else False
+                done = browsers.get(kind if kind in browsers.NAMES else "chromium").stop(h) if kind else None
                 if done:
-                    rows.append({"user": h, "result": "stopped"})
+                    rows.append({"user": h, "result": done})
             else:
                 import time as _t
                 c = _run.cooling(h)

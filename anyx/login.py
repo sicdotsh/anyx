@@ -89,12 +89,19 @@ def login(handle, password, secret=None, browser="chromium", headless=True, wait
     acct = config.account(handle)
     acct["browser"] = browser or acct["browser"]
     drv = browsers.get(acct["browser"])
+    own = acct["browser"] in ("chromium", "chrome")       # the account's own profile under ~/.anyx
     with sync_playwright() as pw:
         ctx = drv.open(pw, handle.lower(), acct, None, headless=headless)
+        p = None
+        before = ctx.cookies("https://x.com")
+        done = False
         try:
-            for d in ("x.com", ".x.com", "twitter.com", ".twitter.com"):
-                ctx.clear_cookies(domain=d)
-            p = ctx.pages[0] if ctx.pages else ctx.new_page()
+            if not own:
+                # someone else's browser: the accounts logged in there stay, and its tabs are left alone
+                where = f"AdsPower profile {acct.get('profile')}" if acct["browser"] == "adspower" else f"the browser at {acct.get('cdp')}"
+                browsers.check_free(ctx, handle.lower(), acct, where, vault.user_id(vault.normalize(before)))
+            browsers.restore(ctx, [])                       # log out, for the login flow
+            p = ctx.pages[0] if own and ctx.pages else ctx.new_page()
             p.set_viewport_size({"width": 1280, "height": 900})
             p.goto("https://x.com/i/flow/login", wait_until="domcontentloaded")
             p.wait_for_timeout(2000)
@@ -140,11 +147,23 @@ def login(handle, password, secret=None, browser="chromium", headless=True, wait
                 raise AnyxError(f"@{handle}: did not reach home ({p.url})")
             link = p.locator('[data-testid="AppTabBar_Profile_Link"]')
             who = (link.first.get_attribute("href") or "").strip("/").lower() if link.count() else handle.lower()
-            vault.save(who, ctx.cookies("https://x.com"))
+            got = ctx.cookies("https://x.com")
+            vault.save(who, got)
             vault.set_born(who, acct["browser"], acct.get("profile"))
             config.set_account(who, browser=acct["browser"], profile=acct.get("profile"))
+            if not own:
+                # as X's "add an existing account": the new one active, the ones before beside it
+                browsers.restore(ctx, before)
+                browsers.put(ctx, vault.switched(before, vault.normalize(got)))
+                from . import run
+                run.save(browsers.key(where), user=vault.user_id(vault.normalize(got)))
+            done = True
             return {"user": who, "result": "logged in"}
         finally:
+            if not done and not own:
+                browsers.restore(ctx, before)              # a failed login leaves the browser as it was
+            if p is not None and not own:
+                p.close()
             drv.close()
             if acct["browser"] in ("chromium", "chrome"):
                 drv.stop(handle.lower())
